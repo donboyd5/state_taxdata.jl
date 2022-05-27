@@ -20,8 +20,13 @@ wh * xmat
 # compare to geosum targets
 sum(geotargets, dims=1)
 
+beta_opt = [
+    -0.02736588 -0.03547895
+    0.01679640  0.08806331
+    -0.05385230  0.03097379]
+
 # whs optimal (to solve for)
-whsopt =
+whs_opt =
 [13.90740 15.09438 14.45099
 16.34579 18.13586 16.76441
 12.42963 13.97414 12.67753
@@ -33,8 +38,9 @@ whsopt =
 14.90122 15.59650 15.05323
 15.72018 16.31167 15.88589]
 
-targets_opt = whsopt' * xmat
+targets_opt = whs_opt' * xmat
 targets_opt - geotargets
+
 
 
 
