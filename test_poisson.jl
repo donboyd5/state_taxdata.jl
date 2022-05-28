@@ -5,114 +5,70 @@ using Optim: converged, maximum, maximizer, minimizer, iterations #some extra fu
 # comment blocks: ctrl-k ctrl-c
 # uncomment: clrl-k ctrl-u
 
+# fix data viewer problem
+# https://stackoverflow.com/questions/67698176/error-loading-webview-error-could-not-register-service-workers-typeerror-fai
+
+# %% TODO:
+#  reverse differentiation
+#  make test problem
+#  actual problems
+
+# %% load local modules
+include("jl/poisson_functions.jl")
+import .poissonFunctions as psf
+
+include("jl/rproblem.jl")
+
 # %% start by creating julia counterparts to selected python functions
 # https://docs.julialang.org/en/v1/manual/functions/
 
 # good, this takes a state-shares matrix and applies it to national weights to
 # get each household's state weights
 
-state_weights(wh, stateshares)
-
-function state_weights(beta, wh, xmat)
-    # beta: coefficients, s x k
-    # wh: weight for each household, h values
-    # xmat: hh characteristics, h x k
-    # geotargets: s x k
-    # betax = beta.dot(xmat.T)
-
-    betaxp = beta * xmat'  # (s x k) * (k x h) = s x h
-
-    # adjust betax to make exponentiation more stable numerically
-    # subtract column-specific constant (the max) from each column of betax
-    # const = betax.max(axis=0)
-    betaxpmax = maximum(betaxp, dims=1) # max of each col of betaxp: 1 x h
-    # betax = jnp.subtract(betax, const)
-    betaxpadj = betaxp .- betaxpmax # (s x h) - (1 x h) = (s x h)
-    ebetaxpadj = exp.(betaxpadj) # s x h
-    # logdiffs = betax - jnp.log(ebetax.sum(axis=0))
-    colsums = sum(ebetaxpadj, dims=1)  # 1 x h
-    logdiffs = betaxpadj .- log.(colsums) # (s x h) - (1 x h) = (s x h)
-    shares = exp.(logdiffs) # (s x h)
-    # whs = jnp.multiply(wh, shares).T
-    whs = (wh .* shares)' # (h x 1) x (h x s) = untransposed
-    whs
-end
-
-whs = state_weights(beta_opt, wh, xmat)
+whs = psf.geo_weights(beta_opt, wh, xmat)
 sum(whs, dims=1)
 sum(whs, dims=2)
 
 sum(whs, dims=2) .- wh'
 
-whs_opt
+calctargets = psf.geo_targets(whs, xmat)
+geotargets
 
-whs .- whs_opt
+psf.sspd(calctargets, geotargets)
 
-targets_opt = whs' * xmat
-targets_opt - geotargets
+psf.objfn(beta_opt, wh, xmat, geotargets)
 
+size(beta_opt)
 
-targets_opt = whs_opt' * xmat
-targets_opt - geotargets
+ibeta = zeros(size(beta_opt))
 
-sum(whs, dims=2) # check
-wh
+function f(beta)
+    psf.objfn(beta, wh, xmat, geotargets)
+end
 
-a = [-1.	3.
-    2.	-2.
-    0.	4.
-    -3.	5.]
-maximum(a, dims=1)
-
-b = [6.	-1.	7.	8.
-     9.	10.	1.	2.]
-
-exp.(b)
-
-ab = a * b
-abmax = maximum(ab, dims=1)
-abadj = ab .- abmax
-eabadj = exp(abadj)
-csums = sum(eabadj, dims=1)
-abs.(csums)
-log.(abs.(csums))
-
-log.([1.0 2.0 3.0])
-
-log(1)
-exp(1)
-log(exp(1))
-
-exp(ab)
-
-ab .- [1, 2, 3, 4]
-state_weights(a, 1, b', 2)
+# methods that do not require a gradient
+res1 = optimize(f, ibeta, NelderMead())
+res2 = optimize(f, ibeta, SimulatedAnnealing())  # max iterations
+# methods that require a gradient
+res3 = optimize(f, ibeta, BFGS(); autodiff = :forward)
+res4 = optimize(f, ibeta, LBFGS(); autodiff = :forward)
+res5 = optimize(f, ibeta, ConjugateGradient(); autodiff = :forward)
+res6 = optimize(f, ibeta, GradientDescent(); autodiff = :forward)
+res7 = optimize(f, ibeta, MomentumGradientDescent(); autodiff = :forward)
+res8 = optimize(f, ibeta, AcceleratedGradientDescent(); autodiff = :forward)
 
 
-# 21	31	-4	-2
-# -6	-22	12	12
-# 36	40	4	8
-# 27	53	-16	-14
+res = res8
+dump(res)
+beta_o = minimizer(res)
+whs_o = psf.geo_weights(beta_o, wh, xmat)
+sum(whs_o, dims=2) .- wh'
+geotarg_o = psf.geo_targets(whs_o, xmat)
+geotargets
+psf.targ_pdiffs(geotarg_o, geotargets)
+psf.sspd(geotarg_o, geotargets)
 
-
-m =  [1 2 3 4;
-      4 1 6 5;
-      7 8 1 9]
-m
-sum(m, dims = 2)  # row sums
-sum(m, dims=1) # col sums
-stateshares = m ./ sum(m, dims=2) # note the ., which broadcasts
-# colshares = m ./ sum(m, dims=1) # 3 people, 4
-sum(stateshares, dims=2)
-
-wh = [100, 200, 300]  # national weights-household for each of 3 households
-wh = [100 200 300]# matrix
-whs = wh .* stateshares
-sum(whs, dims=2) # check
-
-
-
-
+stop
 # def get_whs_logs(beta_object, wh, xmat, geotargets):
 #     # note beta is an s x k matrix
 #     # beta must be a matrix so if beta_object is a vector, reshape it
@@ -133,16 +89,6 @@ sum(whs, dims=2) # check
 #     shares = jnp.exp(logdiffs)
 #     whs = jnp.multiply(wh, shares).T
 #     return whs
-
-
-xmat
-
-
-
-function targets_diff(beta, wh, xmat, geotargets)
-
-end
-
 
 
 # %% selected old python functions
