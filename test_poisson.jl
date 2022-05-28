@@ -40,9 +40,11 @@ psf.objfn(beta_opt, wh, xmat, geotargets)
 
 size(beta_opt)
 
-ibeta = zeros(size(beta_opt))
+ibeta = zeros(size(geotargets))
+ibeta = vec(ibeta)
 
 function f(beta)
+    # beta = reshape(beta, size(geotargets))
     psf.objfn(beta, wh, xmat, geotargets)
 end
 
@@ -51,16 +53,36 @@ res1 = optimize(f, ibeta, NelderMead())
 res2 = optimize(f, ibeta, SimulatedAnnealing())  # max iterations
 # methods that require a gradient
 res3 = optimize(f, ibeta, BFGS(); autodiff = :forward)
+
+# two ways to do it
 res4 = optimize(f, ibeta, LBFGS(); autodiff = :forward)
+res4a = optimize(beta -> psf.objfn(beta, wh, xmat, geotargets), ibeta, LBFGS(); autodiff = :forward)
+
 res5 = optimize(f, ibeta, ConjugateGradient(); autodiff = :forward)
 res6 = optimize(f, ibeta, GradientDescent(); autodiff = :forward)
 res7 = optimize(f, ibeta, MomentumGradientDescent(); autodiff = :forward)
 res8 = optimize(f, ibeta, AcceleratedGradientDescent(); autodiff = :forward)
 
+# hessian required
+# https://julianlsolvers.github.io/Optim.jl/stable
+# https://julianlsolvers.github.io/Optim.jl/v0.9.3/algo/autodiff/
+# https://github.com/JuliaNLSolvers/Optim.jl/tree/v0.4.5
+# td = TwiceDifferentiable(f, ibeta; autodiff = :forward)
+# res9 = optimize(td, vec(ibeta), Newton())
+# Newton requires vector input
+res9 = optimize(f, ibeta, Newton(); autodiff = :forward)
+res10 = optimize(f, ibeta, NewtonTrustRegion(); autodiff = :forward)
 
-res = res8
+# bvec = vec(beta_o)
+beta_o
+reshape(bvec, (3, 2))
+reshape(beta_o, (3, 2))
+
+optimize(f, ibeta, Newton(); autodiff = :forward)
+
+res = res9
 dump(res)
-beta_o = minimizer(res)
+beta_o = reshape(minimizer(res), size(geotargets))
 whs_o = psf.geo_weights(beta_o, wh, xmat)
 sum(whs_o, dims=2) .- wh'
 geotarg_o = psf.geo_targets(whs_o, xmat)
@@ -68,6 +90,28 @@ geotargets
 psf.targ_pdiffs(geotarg_o, geotargets)
 psf.sspd(geotarg_o, geotargets)
 
+
+# %% reverse differentiation
+# https://github.com/JuliaDiff/ReverseDiff.jl/blob/master/examples/gradient.jl
+# f(a, b) = sum(a' * b + a * b')
+using ReverseDiff: GradientTape, GradientConfig, gradient, gradient!, compile, DiffResults
+
+# pre-record a GradientTape for `f` using inputs of shape 100x100 with Float64 elements
+# const f_tape = GradientTape(f, (rand(100, 100), rand(100, 100)))
+const f_tape = GradientTape(f, rand(100))
+
+# compile `f_tape` into a more optimized representation
+const compiled_f_tape = compile(f_tape)
+
+# some inputs and work buffers to play around with
+a, b = rand(100, 100), rand(100, 100)
+inputs = (a, b)
+results = (similar(a), similar(b))
+all_results = map(DiffResults.GradientResult, results)
+cfg = GradientConfig(inputs)
+
+
+# %% end
 stop
 # def get_whs_logs(beta_object, wh, xmat, geotargets):
 #     # note beta is an s x k matrix
