@@ -5,6 +5,9 @@ using Optim: converged, maximum, maximizer, minimizer, iterations #some extra fu
 # comment blocks: ctrl-k ctrl-c
 # uncomment: clrl-k ctrl-u
 
+# https://discourse.julialang.org/t/what-is-the-difference-between-zygote-vs-forwarddiff-and-reversediff/55789/3
+# https://juliadiff.org/
+
 # fix data viewer problem
 # https://stackoverflow.com/questions/67698176/error-loading-webview-error-could-not-register-service-workers-typeerror-fai
 
@@ -110,6 +113,18 @@ results = (similar(a), similar(b))
 all_results = map(DiffResults.GradientResult, results)
 cfg = GradientConfig(inputs)
 
+
+# %% Zygote
+# https://fluxml.ai/Zygote.jl/latest/
+# https://avik-pal.github.io/RayTracer.jl/dev/getting_started/optim_compatibility/
+using Zygote
+Zygote.gradient(x -> 3x^2 + 2x + 1, 5)
+
+function f1(x)
+    3x^2 + 2x + 1
+end
+
+g = Zygote.gradient(f1)
 
 # %% end
 stop
