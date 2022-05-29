@@ -20,6 +20,9 @@ using Optim: converged, maximum, maximizer, minimizer, iterations #some extra fu
 include("jl/poisson_functions.jl")
 import .poissonFunctions as psf
 
+include("jl/make_test_problems.jl")
+import .makeTestProblems as mtp
+
 include("jl/rproblem.jl")
 
 # %% start by creating julia counterparts to selected python functions
@@ -28,43 +31,56 @@ include("jl/rproblem.jl")
 # good, this takes a state-shares matrix and applies it to national weights to
 # get each household's state weights
 
-whs = psf.geo_weights(beta_opt, wh, xmat)
-sum(whs, dims=1)
-sum(whs, dims=2)
-
-sum(whs, dims=2) .- wh'
-
-calctargets = psf.geo_targets(whs, xmat)
-geotargets
-
-psf.sspd(calctargets, geotargets)
-
-psf.objfn(beta_opt, wh, xmat, geotargets)
-
-size(beta_opt)
-
-ibeta = zeros(size(geotargets))
-ibeta = vec(ibeta)
-
 function f(beta)
     # beta = reshape(beta, size(geotargets))
     psf.objfn(beta, wh, xmat, geotargets)
 end
 
+tp = mtp.mtp(10, 3, 2)
+tp = mtp.mtp(100, 8, 4)
+tp = mtp.mtp(1000, 12, 6)
+tp = mtp.mtp(10000, 25, 12)
+tp = mtp.mtp(50000, 50, 20)
+
+xmat = tp[:xmat]
+wh = tp[:wh]
+whs = tp[:whs]
+geotargets = tp[:geotargets]
+targets = tp[:targets]
+
+ibeta = zeros(length(geotargets))
 # methods that do not require a gradient
-res1 = optimize(f, ibeta, NelderMead())
+res1 = optimize(f, ibeta, NelderMead(),
+Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true))
+
 res2 = optimize(f, ibeta, SimulatedAnnealing())  # max iterations
 # methods that require a gradient
-res3 = optimize(f, ibeta, BFGS(); autodiff = :forward)
+
+res3 = optimize(f, ibeta, BFGS(),
+  Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+   autodiff = :forward) # gets slow with BIG problems
 
 # two ways to do it
-res4 = optimize(f, ibeta, LBFGS(); autodiff = :forward)
+res4 = optimize(f, ibeta, LBFGS(),
+Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+ autodiff = :forward)
 res4a = optimize(beta -> psf.objfn(beta, wh, xmat, geotargets), ibeta, LBFGS(); autodiff = :forward)
 
-res5 = optimize(f, ibeta, ConjugateGradient(); autodiff = :forward)
-res6 = optimize(f, ibeta, GradientDescent(); autodiff = :forward)
-res7 = optimize(f, ibeta, MomentumGradientDescent(); autodiff = :forward)
-res8 = optimize(f, ibeta, AcceleratedGradientDescent(); autodiff = :forward)
+res5 = optimize(f, ibeta, ConjugateGradient(),
+Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+ autodiff = :forward)
+
+ res6 = optimize(f, ibeta, GradientDescent(),
+Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+ autodiff = :forward) # seems to become very slow as problem size increases
+
+res7 = optimize(f, ibeta, MomentumGradientDescent(),
+Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+ autodiff = :forward)
+
+res8 = optimize(f, ibeta, AcceleratedGradientDescent(),
+  Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+   autodiff = :forward)
 
 # hessian required
 # https://julianlsolvers.github.io/Optim.jl/stable
@@ -73,21 +89,27 @@ res8 = optimize(f, ibeta, AcceleratedGradientDescent(); autodiff = :forward)
 # td = TwiceDifferentiable(f, ibeta; autodiff = :forward)
 # res9 = optimize(td, vec(ibeta), Newton())
 # Newton requires vector input
-res9 = optimize(f, ibeta, Newton(); autodiff = :forward)
-res10 = optimize(f, ibeta, NewtonTrustRegion(); autodiff = :forward)
+res9 = optimize(f, ibeta, Newton(),
+Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+ autodiff = :forward) # seems to get slow as problem gets large
+
+res10 = optimize(f, ibeta, NewtonTrustRegion(),
+  Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+   autodiff = :forward)
 
 # bvec = vec(beta_o)
-beta_o
-reshape(bvec, (3, 2))
-reshape(beta_o, (3, 2))
+# beta_o
+# reshape(bvec, (3, 2))
+# reshape(beta_o, (3, 2))
 
-optimize(f, ibeta, Newton(); autodiff = :forward)
+# optimize(f, ibeta, Newton(); autodiff = :forward)
 
-res = res9
+res = res7
 dump(res)
 beta_o = reshape(minimizer(res), size(geotargets))
 whs_o = psf.geo_weights(beta_o, wh, xmat)
-sum(whs_o, dims=2) .- wh'
+whdiffs = sum(whs_o, dims=2) .- wh
+whdiffs ./ wh
 geotarg_o = psf.geo_targets(whs_o, xmat)
 geotargets
 psf.targ_pdiffs(geotarg_o, geotargets)
@@ -113,6 +135,22 @@ results = (similar(a), similar(b))
 all_results = map(DiffResults.GradientResult, results)
 cfg = GradientConfig(inputs)
 
+# https://www.youtube.com/watch?v=B5O3xBolDCc
+# https://github.com/cpfiffer/julia-bootcamp-2022/blob/main/session-3/optimization-lecture.ipynb
+using ReverseDiff
+# ReverseDiff only works with array inputs
+# f3(x::Vector{Float64}) = x^3
+f3(x) = x^3
+f3(4.0)
+f3([4.0, 2.0])
+gf3(x) = ReverseDiff.gradient(z -> f3(z[1]), x)[1]
+gf3([4.0])
+x = [4.0]
+gf3(x)
+
+# next does not work yet
+gf3a = ReverseDiff.gradient(f3, x)
+gf3a = ReverseDiff.gradient(f3, x[1])
 
 # %% Zygote
 # https://fluxml.ai/Zygote.jl/latest/
@@ -124,7 +162,37 @@ function f1(x)
     3x^2 + 2x + 1
 end
 
-g = Zygote.gradient(f1)
+g = Zygote.gradient(f1, 5)
+g
+typeof(g)
+
+Zygote.gradient(f1, x)
+
+Zygote.gradient(f1)
+gradient(model -> sum(model(x)), model)
+
+# %% misc notes
+
+wh
+
+whs = psf.geo_weights(beta_opt, wh, xmat)
+sum(whs, dims=1)
+sum(whs, dims=2)
+
+sum(whs, dims=2) .- wh'
+
+calctargets = psf.geo_targets(whs, xmat)
+geotargets
+
+psf.sspd(calctargets, geotargets)
+
+psf.objfn(beta_opt, wh, xmat, geotargets)
+
+size(beta_opt)
+
+ibeta = zeros(size(geotargets))
+ibeta = vec(ibeta)
+length(geotargets)
 
 # %% end
 stop

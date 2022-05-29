@@ -21,9 +21,8 @@ function geo_weights(beta, wh, xmat)
     # logdiffs = betax - jnp.log(ebetax.sum(axis=0))
     colsums = sum(ebetaxpadj, dims=1)  # 1 x h
     logdiffs = betaxpadj .- log.(colsums) # (s x h) - (1 x h) = (s x h)
-    shares = exp.(logdiffs) # (s x h)
-    # whs = jnp.multiply(wh, shares).T
-    whs = (wh .* shares)' # (h x 1) x (h x s) = untransposed
+    shares = exp.(logdiffs)' # (h x s) after transpose
+    whs = wh .* shares # (h x 1) x (h x s) elementwise
     whs
 end
 
