@@ -49,6 +49,7 @@ geotargets = tp[:geotargets]
 targets = tp[:targets]
 
 ibeta = zeros(length(geotargets))
+
 # methods that do not require a gradient
 res1 = optimize(f, ibeta, NelderMead(),
 Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true))
@@ -69,18 +70,25 @@ res4a = optimize(beta -> psf.objfn(beta, wh, xmat, geotargets), ibeta, LBFGS(); 
 res5 = optimize(f, ibeta, ConjugateGradient(),
 Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
  autodiff = :forward)
+#
 
+ # this seems really good after 3 iterations
  res6 = optimize(f, ibeta, GradientDescent(),
-Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
  autodiff = :forward) # seems to become very slow as problem size increases
+# 1910.7 3.078448e-11
 
+# really good after 5 iterations
 res7 = optimize(f, ibeta, MomentumGradientDescent(),
-Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
  autodiff = :forward)
+# 1602.8 3.078448e-11
 
+# really good after 3 iterations 562 secs
 res8 = optimize(f, ibeta, AcceleratedGradientDescent(),
-  Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+  Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
    autodiff = :forward)
+# 1924.9 3.078448e-11
 
 # hessian required
 # https://julianlsolvers.github.io/Optim.jl/stable
@@ -88,24 +96,19 @@ res8 = optimize(f, ibeta, AcceleratedGradientDescent(),
 # https://github.com/JuliaNLSolvers/Optim.jl/tree/v0.4.5
 # td = TwiceDifferentiable(f, ibeta; autodiff = :forward)
 # res9 = optimize(td, vec(ibeta), Newton())
-# Newton requires vector input
+# Newton requires vector input; TOO slow with big problems
 res9 = optimize(f, ibeta, Newton(),
 Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
  autodiff = :forward) # seems to get slow as problem gets large
 
 res10 = optimize(f, ibeta, NewtonTrustRegion(),
-  Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+  Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
    autodiff = :forward)
 
-# bvec = vec(beta_o)
-# beta_o
-# reshape(bvec, (3, 2))
-# reshape(beta_o, (3, 2))
 
-# optimize(f, ibeta, Newton(); autodiff = :forward)
 
-res = res7
-dump(res)
+res = res8
+# dump(res)
 beta_o = reshape(minimizer(res), size(geotargets))
 whs_o = psf.geo_weights(beta_o, wh, xmat)
 whdiffs = sum(whs_o, dims=2) .- wh
@@ -155,7 +158,43 @@ gf3a = ReverseDiff.gradient(f3, x[1])
 # %% Zygote
 # https://fluxml.ai/Zygote.jl/latest/
 # https://avik-pal.github.io/RayTracer.jl/dev/getting_started/optim_compatibility/
+# https://julia.quantecon.org/more_julia/optimization_solver_packages.html
+# https://www.youtube.com/watch?v=Sv3d0k7wWHk
+
 using Zygote
+
+using Optim, LinearAlgebra
+N = 1000000
+y = rand(N)
+λ = 0.01
+obj(x) = sum((x .- y).^2) + λ*norm(x)
+
+x_iv = rand(N)
+function g!(G, x)
+    G .=  obj'(x)
+end
+
+results = optimize(obj, g!, x_iv, LBFGS()) # or ConjugateGradient()
+println("minimum = $(results.minimum) with in "*
+"$(results.iterations) iterations")
+
+#   https://discourse.julialang.org/t/strange-errors-occurred-when-i-optimized-with-zygote-and-optim/47461
+using Zygote
+using Optim
+using RecursiveArrayTools
+#This is the target function that I’m optimizing
+function get_f(A)
+  M=reshape(1:16,4,4)
+  U=exp(A)
+  T=UMU’
+  return tr(T)
+end
+function my_function()
+  g(A)=gradient(A->get_f(A), A)[1] # This is my gradient function
+  A0=zeros(4,4)
+  results=optimize(get_f,g,VectorOfArray([A0]), LBFGS())
+end
+
 Zygote.gradient(x -> 3x^2 + 2x + 1, 5)
 
 function f1(x)
