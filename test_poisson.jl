@@ -44,6 +44,7 @@ tp = mtp.mtp(100, 8, 4)
 tp = mtp.mtp(1000, 12, 6)
 tp = mtp.mtp(10000, 25, 12)
 tp = mtp.mtp(50000, 50, 20)
+tp = mtp.mtp(100000, 75, 40)
 
 # unpack the tuple
 xmat = tp.xmat
@@ -123,11 +124,19 @@ end
 res11 = optimize(f, g!, ibeta, LBFGS(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
 
+# cg still seems best
 res12 = optimize(f, g!, ibeta, ConjugateGradient(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
 
 res13 = optimize(f, g!, ibeta, GradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+
+res14 = optimize(f, g!, ibeta, MomentumGradientDescent(),
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+
+res15 = optimize(f, g!, ibeta, AcceleratedGradientDescent(),
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+
 
 
 
