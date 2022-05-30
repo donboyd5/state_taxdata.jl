@@ -1,9 +1,10 @@
+# %% libraries
 using LinearAlgebra
 using Statistics
 using Optim
 using Optim: converged, maximum, maximizer, minimizer, iterations #some extra functions
 using Zygote
-
+using Tables
 
 # comment blocks: ctrl-k ctrl-c
 # uncomment: clrl-k ctrl-u
@@ -26,6 +27,9 @@ import .poissonFunctions as psf
 include("jl/make_test_problems.jl")
 import .makeTestProblems as mtp
 
+include("jl/getdata_functions.jl")
+import .getTaxProblem as gtp
+
 include("jl/rproblem.jl")
 
 # %% start by creating julia counterparts to selected python functions
@@ -33,12 +37,19 @@ include("jl/rproblem.jl")
 
 # good, this takes a state-shares matrix and applies it to national weights to
 # get each household's state weights
+# %% functions
 
 function f(beta)
     # beta = reshape(beta, size(geotargets))
     psf.objfn(beta, wh, xmat, geotargets)
 end
 
+function g!(G, x)
+  G .=  f'(x)
+end
+
+
+# %% get a problem
 tp = mtp.mtp(10, 3, 2)
 tp = mtp.mtp(100, 8, 4)
 tp = mtp.mtp(1000, 12, 6)
@@ -46,16 +57,18 @@ tp = mtp.mtp(10000, 25, 12)
 tp = mtp.mtp(50000, 50, 20)
 tp = mtp.mtp(100000, 75, 40)
 
+tp = gtp.get_taxprob(2)
+
 # unpack the tuple
 xmat = tp.xmat
 wh = tp.wh
-whs = tp.whs
 geotargets = tp.geotargets
-targets = tp.targets
+# whs = tp.whs
+# targets = tp.targets
 
 ibeta = zeros(length(geotargets))
 
-# methods that do not require a gradient
+# %% run methods that do not require a gradient
 res1 = optimize(f, ibeta, NelderMead(),
 Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true))
 
@@ -63,7 +76,7 @@ res2 = optimize(f, ibeta, SimulatedAnnealing(),
   Optim.Options(g_tol = 1e-4, iterations = 100000))
 
 
-# methods that require a gradient
+# %% run methods that require a gradient with forward auto differentiation
 res3 = optimize(f, ibeta, BFGS(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
    autodiff = :forward) # gets slow with BIG problems
@@ -117,30 +130,27 @@ res10 = optimize(f, ibeta, NewtonTrustRegion(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward)
 
-function g!(G, x)
-    G .=  f'(x)
-end
+
+# %% run reverse auto differentiation
 
 res11 = optimize(f, g!, ibeta, LBFGS(),
-  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 4000, store_trace = true, show_trace = true))
 
 # cg still seems best
 res12 = optimize(f, g!, ibeta, ConjugateGradient(),
-  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
 
 res13 = optimize(f, g!, ibeta, GradientDescent(),
-  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
 
 res14 = optimize(f, g!, ibeta, MomentumGradientDescent(),
-  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
 
 res15 = optimize(f, g!, ibeta, AcceleratedGradientDescent(),
-  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
 
-
-
-
-res = res13
+# %% examine results
+res = res11
 # dump(res)
 beta_o = reshape(minimizer(res), size(geotargets))
 whs_o = psf.geo_weights(beta_o, wh, xmat)
@@ -151,7 +161,7 @@ quantile(vec(whpdiffs), (0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0))
 geotarg_o = psf.geo_targets(whs_o, xmat)
 geotargets
 gtpdiffs = psf.targ_pdiffs(geotarg_o, geotargets)
-quantile(vec(gtpdiffs), (0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0))
+quantile(vec(gtpdiffs), (0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0))
 
 psf.sspd(geotarg_o, geotargets)
 
