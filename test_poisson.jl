@@ -1,6 +1,9 @@
 using LinearAlgebra
+using Statistics
 using Optim
 using Optim: converged, maximum, maximizer, minimizer, iterations #some extra functions
+using Zygote
+
 
 # comment blocks: ctrl-k ctrl-c
 # uncomment: clrl-k ctrl-u
@@ -42,11 +45,12 @@ tp = mtp.mtp(1000, 12, 6)
 tp = mtp.mtp(10000, 25, 12)
 tp = mtp.mtp(50000, 50, 20)
 
-xmat = tp[:xmat]
-wh = tp[:wh]
-whs = tp[:whs]
-geotargets = tp[:geotargets]
-targets = tp[:targets]
+# unpack the tuple
+xmat = tp.xmat
+wh = tp.wh
+whs = tp.whs
+geotargets = tp.geotargets
+targets = tp.targets
 
 ibeta = zeros(length(geotargets))
 
@@ -54,40 +58,47 @@ ibeta = zeros(length(geotargets))
 res1 = optimize(f, ibeta, NelderMead(),
 Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true))
 
-res2 = optimize(f, ibeta, SimulatedAnnealing())  # max iterations
-# methods that require a gradient
+res2 = optimize(f, ibeta, SimulatedAnnealing(),
+  Optim.Options(g_tol = 1e-4, iterations = 100000))
 
+
+# methods that require a gradient
 res3 = optimize(f, ibeta, BFGS(),
-  Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
    autodiff = :forward) # gets slow with BIG problems
 
 # two ways to do it
 res4 = optimize(f, ibeta, LBFGS(),
-Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
- autodiff = :forward)
-res4a = optimize(beta -> psf.objfn(beta, wh, xmat, geotargets), ibeta, LBFGS(); autodiff = :forward)
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
+  autodiff = :forward)
+# 1897.9 4.125432e-14
 
+ res4a = optimize(beta -> psf.objfn(beta, wh, xmat, geotargets), ibeta, LBFGS(); autodiff = :forward)
+
+
+# CG possibly best!
+# very good after 2 iterations ~4 mins, almost perfect after 3, 4.8 mins
 res5 = optimize(f, ibeta, ConjugateGradient(),
-Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
+Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
  autodiff = :forward)
-#
+# 1102.0 4.125609e-14 seemingly best
 
  # this seems really good after 3 iterations
  res6 = optimize(f, ibeta, GradientDescent(),
-Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
- autodiff = :forward) # seems to become very slow as problem size increases
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
+  autodiff = :forward) # seems to become very slow as problem size increases
 # 1910.7 3.078448e-11
 
 # really good after 5 iterations
 res7 = optimize(f, ibeta, MomentumGradientDescent(),
-Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
- autodiff = :forward)
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
+  autodiff = :forward)
 # 1602.8 3.078448e-11
 
 # really good after 3 iterations 562 secs
 res8 = optimize(f, ibeta, AcceleratedGradientDescent(),
-  Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
-   autodiff = :forward)
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
+  autodiff = :forward)
 # 1924.9 3.078448e-11
 
 # hessian required
@@ -98,24 +109,41 @@ res8 = optimize(f, ibeta, AcceleratedGradientDescent(),
 # res9 = optimize(td, vec(ibeta), Newton())
 # Newton requires vector input; TOO slow with big problems
 res9 = optimize(f, ibeta, Newton(),
-Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
- autodiff = :forward) # seems to get slow as problem gets large
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
+  autodiff = :forward) # seems to get slow as problem gets large
 
 res10 = optimize(f, ibeta, NewtonTrustRegion(),
-  Optim.Options(f_tol = 1e-10, g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true);
-   autodiff = :forward)
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
+  autodiff = :forward)
+
+function g!(G, x)
+    G .=  f'(x)
+end
+
+res11 = optimize(f, g!, ibeta, LBFGS(),
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+
+res12 = optimize(f, g!, ibeta, ConjugateGradient(),
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
+
+res13 = optimize(f, g!, ibeta, GradientDescent(),
+  Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true))
 
 
 
-res = res8
+res = res13
 # dump(res)
 beta_o = reshape(minimizer(res), size(geotargets))
 whs_o = psf.geo_weights(beta_o, wh, xmat)
 whdiffs = sum(whs_o, dims=2) .- wh
-whdiffs ./ wh
+whpdiffs = whdiffs ./ wh
+quantile(vec(whpdiffs), (0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0))
+
 geotarg_o = psf.geo_targets(whs_o, xmat)
 geotargets
-psf.targ_pdiffs(geotarg_o, geotargets)
+gtpdiffs = psf.targ_pdiffs(geotarg_o, geotargets)
+quantile(vec(gtpdiffs), (0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0))
+
 psf.sspd(geotarg_o, geotargets)
 
 
@@ -178,6 +206,8 @@ results = optimize(obj, g!, x_iv, LBFGS()) # or ConjugateGradient()
 println("minimum = $(results.minimum) with in "*
 "$(results.iterations) iterations")
 
+results2 = optimize(obj, x_iv, LBFGS(); autodiff = :forward)
+
 #   https://discourse.julialang.org/t/strange-errors-occurred-when-i-optimized-with-zygote-and-optim/47461
 using Zygote
 using Optim
@@ -212,29 +242,10 @@ gradient(model -> sum(model(x)), model)
 
 # %% misc notes
 
-wh
-
-whs = psf.geo_weights(beta_opt, wh, xmat)
-sum(whs, dims=1)
-sum(whs, dims=2)
-
-sum(whs, dims=2) .- wh'
-
-calctargets = psf.geo_targets(whs, xmat)
-geotargets
-
-psf.sspd(calctargets, geotargets)
-
-psf.objfn(beta_opt, wh, xmat, geotargets)
-
-size(beta_opt)
-
-ibeta = zeros(size(geotargets))
-ibeta = vec(ibeta)
-length(geotargets)
 
 # %% end
-stop
+
+
 # def get_whs_logs(beta_object, wh, xmat, geotargets):
 #     # note beta is an s x k matrix
 #     # beta must be a matrix so if beta_object is a vector, reshape it
