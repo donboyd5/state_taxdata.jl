@@ -5,6 +5,7 @@ using Optim
 using Optim: converged, maximum, maximizer, minimizer, iterations #some extra functions
 using Zygote
 using Tables
+using LeastSquaresOptim
 
 # comment blocks: ctrl-k ctrl-c
 # uncomment: clrl-k ctrl-u
@@ -41,7 +42,7 @@ include("jl/rproblem.jl")
 
 function f(beta)
     # beta = reshape(beta, size(geotargets))
-    psf.objfn(beta, wh, xmat, geotargets)
+    psf.objfn(beta, wh, xmat, geotargets) / obj_scale
 end
 
 function g!(G, x)
@@ -57,9 +58,9 @@ tp = mtp.mtp(10000, 25, 12)
 tp = mtp.mtp(50000, 50, 20)
 tp = mtp.mtp(100000, 75, 40)
 
-tp = gtp.get_taxprob(2)
+tp = gtp.get_taxprob(6)
 
-# unpack the tuple
+# %% unpack the tuple
 xmat = tp.xmat
 wh = tp.wh
 geotargets = tp.geotargets
@@ -68,12 +69,90 @@ geotargets = tp.geotargets
 
 ibeta = zeros(length(geotargets))
 
+# %% examine the problems
+geotargets
+nattargs = sum(geotargets, dims=1) # national value for each target
+sum(wh)
+
+calcnat = sum(wh .* xmat, dims=1) # national value for each target at national weights
+calcdiffs = calcnat .- nattargs
+quantile(vec(calcdiffs))
+calcpdiffs = calcdiffs ./ nattargs
+quantile(vec(calcpdiffs))
+
+
+
+# %% scaling
+# scale targets and xmat
+# scale_factors = xmat.sum(axis=0) / scale_goal  # get sum of each col of xmat
+# xmat = jnp.divide(xmat, scale_factors)
+# geotargets = jnp.divide(geotargets, scale_factors)
+# scale_goal typically was 10 or 1000
+
+# when all done, adjust results
+
+# ? http://www.fitzgibbon.ie/optimization-parameter-scaling
+
+
+# s = size(tp.geotargets)[1]
+h = size(tp.xmat)[1]
+# k = size(tp.geotargets)[2]
+
+# get data
+xmat = tp.xmat
+wh = tp.wh
+geotargets = tp.geotargets
+
+obj_scale = 1.0
+
+# wh scaling - multiplicative
+wh_scale_goal = 100. # goal for the maxmimum
+# whscale = wh_scale_goal / maximum(wh)  # median
+whscale = wh_scale_goal / median(wh)
+wh = wh .* whscale
+quantile(vec(wh))
+
+# make the initial adjustment to geotargets based on whscale
+geotargets = geotargets .* whscale
+quantile(vec(geotargets))
+minimum(geotargets, dims=1)
+maximum(geotargets, dims=1)
+
+# xmat scaling multiplicative based on max abs of each col of geotargets
+targ_goal = 0.1
+# targscale = targ_goal ./ maximum(abs.(tp.geotargets), dims=1)
+# targscale = targ_goal ./ sum(tp.geotargets, dims=1)
+targscale = targ_goal ./ sum(xmat, dims=1)
+geotargets = targscale .* geotargets
+quantile(vec(geotargets))
+xmat = targscale .* tp.xmat
+
+
+
+# scale = (k / 1000.) ./ sum(abs.(tp.xmat), dims=1)
+# targscale = 100000.0 ./ sum(xmat, dims=1)
+# targscale = 0.1 ./ mean(abs.(xmat), dims=1) # mean avoids risk of 0 denominator
+# adjust targets to be closer to a constant value
+#targscale = 1. ./ maximum(geotargets, dims=1)
+# targscale = 1.
+# geotargets = targscale .* geotargets
+
+# xmat = targscale .* tp.xmat
+
+quantile(vec(xmat))
+
+ibeta = zeros(length(tp.geotargets))
+
+# ibeta = randn(length(tp.geotargets))
+
+sum(xmat, dims=1)
+
 # %% run methods that do not require a gradient
 res1 = optimize(f, ibeta, NelderMead(),
 Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true))
 
 res2 = optimize(f, ibeta, SimulatedAnnealing(),
-  Optim.Options(g_tol = 1e-4, iterations = 100000))
+  Optim.Options(g_tol = 1e-4, iterations = 100))
 
 
 # %% run methods that require a gradient with forward auto differentiation
@@ -134,23 +213,245 @@ res10 = optimize(f, ibeta, NewtonTrustRegion(),
 # %% run reverse auto differentiation
 
 res11 = optimize(f, g!, ibeta, LBFGS(),
-  Optim.Options(g_tol = 1e-6, iterations = 4000, store_trace = true, show_trace = true))
+  Optim.Options(iterations = 100, store_trace = true, show_trace = true))
+
+res11a = optimize(f, g!, minimizer(res11a), LBFGS(),
+  Optim.Options(iterations = 2000, store_trace = true, show_trace = true))
 
 # cg still seems best
-res12 = optimize(f, g!, ibeta, ConjugateGradient(),
-  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
+# lphaguess = LineSearches.InitialQuadratic() and linesearch = LineSearches.MoreThuente()  investigate
+f(ibeta)
+res12 = optimize(f, g!, ibeta, ConjugateGradient(eta=0.01),
+  Optim.Options(g_tol = 1e-6, iterations = 10000, store_trace = true, show_trace = true))
+
+res12a = optimize(f, g!, minimizer(res11a), ConjugateGradient(eta=0.01),
+  Optim.Options(g_tol = 1e-6, iterations = 2000, store_trace = true, show_trace = true))
 
 res13 = optimize(f, g!, ibeta, GradientDescent(),
-  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+res13a = optimize(f, g!, minimizer(res13a), GradientDescent(),
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
 
 res14 = optimize(f, g!, ibeta, MomentumGradientDescent(),
-  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 10000, store_trace = true, show_trace = true))
 
 res15 = optimize(f, g!, ibeta, AcceleratedGradientDescent(),
-  Optim.Options(g_tol = 1e-6, iterations = 1000, store_trace = true, show_trace = true))
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+# res16 = optimize(f, g!, ibeta, Newton(),
+#   Optim.Options(g_tol = 1e-6, iterations = 5, store_trace = true, show_trace = true);
+#   autodiff = :forward) # seems to get slow as problem gets large
+
+res17 = optimize(f, g!, ibeta, ConjugateGradient(eta=0.01),
+  Optim.Options(iterations = 1000, store_trace = true, show_trace = true))
+
+res17a = optimize(f, g!, minimizer(res17a), ConjugateGradient(eta=0.01),
+  Optim.Options(iterations = 2000, store_trace = true, show_trace = true))
+
+
+res18 = optimize(f, g!, ibeta, Optim.KrylovTrustRegion(),
+  Optim.Options(iterations = 10, store_trace = true, show_trace = true))
+
+# https://galacticoptim.sciml.ai/dev/API/optimization_problem/
+# https://galacticoptim.sciml.ai/stable/API/optimization_problem/
+using GalacticOptim
+using GalacticOptimJL
+using ModelingToolkit
+prob = OptimizationProblem(f, ibeta, p=nothing)
+OptimizationProblem(f, x, p = DiffEqBase.NullParameters(),;
+                    lb = nothing,
+                    ub = nothing,
+                    lcons = nothing,
+                    ucons = nothing,
+                    kwargs...)
+# OptimizationFunction(f, AutoModelingToolkit(), x0,p,
+#                      grad = false, hess = false, sparse = false,
+#                      checkbounds = false,
+#                      linenumbers = true,
+#                      parallel=SerialForm(),
+#                      kwargs...)
+OptimizationFunction(f, AutoZygote())
+
+prob = OptimizationProblem(OptimizationFunction(f, GalacticOptim.AutoZygote()), ibeta)
+# ERROR: MethodError: no method matching f(::Vector{Float64}, ::SciMLBase.NullParameters)
+
+function f2(beta::Vector{Float64}, parms::SciMLBase.NullParameters)
+  # beta = reshape(beta, size(geotargets))
+  psf.objfn(beta, wh, xmat, geotargets) / obj_scale
+end
+
+prob = OptimizationProblem(OptimizationFunction(f2, GalacticOptim.AutoZygote()), ibeta)
+
+# OptimizationFunction(f, AutoModelingToolkit(), ibeta,
+#                      grad = true, hess = false, sparse = false,
+#                      checkbounds = false,
+#                      linenumbers = true)
+sol = solve(prob, Optim.KrylovTrustRegion())
+
+using GalacticOptim
+abc = OptimizationFunction(f; grad = GalacticOptim.AutoForwardDiff(), hes = GalacticOptim.AutoForwardDiff())
+
+prob = OptimizationProblem(OptimizationFunction(f, GalacticOptim.AutoZygote()), ibeta)
+prob = OptimizationProblem(
+  OptimizationFunction(f; grad = GalacticOptim.AutoForwardDiff(), hes = GalacticOptim.AutoForwardDiff()),
+  ibeta)
+solve(prob, Optim.KrylovTrustRegion())
+
+# ERROR: Use OptimizationFunction to pass the derivatives or automatically generate them with one of the autodiff backends
+
+# 2.005618e+07 # .4 default
+# 1.368090e+07 # .01
+# 1.315721e+07 # .001
+# 1.127418e+07 # 0
+# 1.236774e+07 # 1.0
+
+# %% newton
+# https://discourse.julialang.org/t/optim-jl-oncedifferentiable-baby-steps/10185
+# https://julianlsolvers.github.io/Optim.jl/stable/#examples/generated/maxlikenlm/
+# max likelihood example
+n = 500                             # Number of observations
+nvar = 2                            # Number of variables
+β = ones(nvar) * 3.0                # True coefficients
+x = [ones(n) randn(n, nvar - 1)]    # X matrix of explanatory variables plus constant
+ε = randn(n) * 0.5                  # Error variance
+y = x * β + ε;                      # Generate Data
+
+function Log_Likelihood(X, Y, β, log_σ)
+  σ = exp(log_σ)
+  llike = -n/2*log(2π) - n/2* log(σ^2) - (sum((Y - X * β).^2) / (2σ^2))
+  llike = -llike
+end
+
+func = TwiceDifferentiable(vars -> Log_Likelihood(x, y, vars[1:nvar], vars[nvar + 1]),
+                           ones(nvar+1); autodiff=:forward);
+
+opt = optimize(func, ones(nvar+1))
+
+# %% newton my data
+
+fnewt = TwiceDifferentiable(f, ibeta; autodiff=:forward)
+
+resnewt = optimize(fnewt, ibeta, Optim.Options(iterations = 100, store_trace = true, show_trace = true))
+
+# %% hessians
+# https://gitter.im/JuliaNLSolvers/Optim.jl?at=5f43ca8bec534f584fbaf88b
+using ModelingToolkit
+using Optim
+@variables x[1:2]
+f1 = (1.0 - x[1])^2 + 100.0 * (x[2] - x[1]^2)^2
+g1 = ModelingToolkit.gradient(f1, x)
+h1 = ModelingToolkit.hessian(f1, x)
+
+buildedF = build_function(f1, x[1:2])
+buildedG = build_function(g1, x[1:2])
+buildedH = build_function(h1, x[1:2])
+
+newF = eval(buildedF)
+newG! = eval(buildedG[2])
+newH! = eval(buildedH[2])
+
+initial_x = zeros(2)
+
+@time Optim.minimizer(optimize(newF, initial_x, Newton(); autodiff=:forward))
+@time Optim.minimizer(optimize(newF, newG!, newH!, initial_x, Newton()))
+
+# %% GalacticOptim
+# https://discourse.julialang.org/t/best-nonlinear-optimizer-for-a-continuous-convex-problem/77771/11
+# https://docs.juliahub.com/GalacticOptim/fP6Iz/3.4.0/tutorials/intro/
+# import Pkg; Pkg.add("Optimization")
+
+# this may work
+using GalacticOptim
+using GalacticOptimJL
+using Zygote
+using Optim
+# rosenbrock(x,p) =  (p[1] - x[1])^2 + p[2] * (x[2] - x[1]^2)^2
+fn(x) = sum(x.^2)
+# x0 = zeros(5)
+x0 = [1., 2.0, 3.0, 4.0, 5.0]
+fn(x0)
+# p  = [1.0,100.0]
+# using ForwardDiff
+fng = GalacticOptim.OptimizationFunction(fn, GalacticOptim.AutoZygote())
+prob = GalacticOptim.OptimizationProblem(fng, x0)
+
+sol = GalacticOptim.solve(prob, Optim.KrylovTrustRegion())
+
+
+# again?
+using GalacticOptim
+using GalacticOptimJL
+using Zygote
+using Optim
+# rosenbrock(x,p) =  (p[1] - x[1])^2 + p[2] * (x[2] - x[1]^2)^2
+fn(x, p) = sum(x.^2)
+# x0 = zeros(5)
+x0 = [1., 2.0, 3.0, 4.0, 5.0]
+fn(x0, nothing)
+# p  = [1.0,100.0]
+# using ForwardDiff
+fn2 = GalacticOptim.OptimizationFunction(fn, GalacticOptim.AutoZygote())
+prob = GalacticOptim.OptimizationProblem(fn2, x0, nothing)
+# using Optimization
+sol = GalacticOptim.solve(prob, Optim.KrylovTrustRegion())
+
+
+
+
+
+
+using GalacticOptim
+rosenbrock(x,p) =  (p[1] - x[1])^2 + p[2] * (x[2] - x[1]^2)^2
+x0 = zeros(2)
+p  = [1.0,100.0]
+
+prob = OptimizationProblem(rosenbrock,x0,p)
+
+using GalacticOptimJL
+sol = solve(prob,NelderMead())
+
+using GalacticBBO
+prob = OptimizationProblem(rosenbrock, x0, p, lb = [-1.0,-1.0], ub = [1.0,1.0])
+sol = solve(prob,BBO_adaptive_de_rand_1_bin_radiuslimited())
+
+sol.original
+
+using ForwardDiff
+f3 = OptimizationFunction(rosenbrock, GalacticOptim.AutoForwardDiff())
+prob = OptimizationProblem(f3, x0, p)
+sol = solve(prob,BFGS())
+
+prob = OptimizationProblem(f3, x0, p, lb = [-1.0,-1.0], ub = [1.0,1.0])
+sol = solve(prob, Fminbox(GradientDescent()))
+
+sol
+
+# %% least squares
+LeastSquaresOptim.optimize(f, ibeta, Dogleg())
+f(ibeta)
+
+LeastSquaresOptim.optimize!(LeastSquaresProblem(x = ibeta,
+                                f! = f, output_length = 2))
+
+
+# %% ipopt
+using JuMP, Ipopt
+m = Model(Ipopt.Optimizer)
+
+@variable(m, x[1:2])
+@NLobjective(m, Min, (x[1]-3)^3 + (x[2]-4)^2)
+@NLconstraint(m, (x[1]-1)^2 + (x[2]+1)^3 + exp(-x[1]) <= 1)
+
+JuMP.optimize!(m)
+println("** Optimal objective function value = ", JuMP.objective_value(m))
+println("** Optimal solution = ", JuMP.value.(x))
+
+include("nlp_ipopt.jl")
+
 
 # %% examine results
-res = res11
+res = res12
 # dump(res)
 beta_o = reshape(minimizer(res), size(geotargets))
 whs_o = psf.geo_weights(beta_o, wh, xmat)
@@ -160,13 +461,46 @@ quantile(vec(whpdiffs), (0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0))
 
 geotarg_o = psf.geo_targets(whs_o, xmat)
 geotargets
+# quantile(vec(abs.(tp.geotargets)))
 gtpdiffs = psf.targ_pdiffs(geotarg_o, geotargets)
 quantile(vec(gtpdiffs), (0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0))
 
 psf.sspd(geotarg_o, geotargets)
 
+# now return to unscaled values
+whs_ou = whs_o ./ whscale
+wh_ou = sum(whs_ou, dims=2)
+quantile(vec((wh_ou .- tp.wh) ./ tp.wh), (0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0))
 
-# %% reverse differentiation
+getarg_ou = geotargets ./ targscale ./ whscale
+tp.geotargets
+quantile(vec((getarg_ou .- tp.geotargets) ./ tp.geotargets), (0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0))
+
+# %% roots
+using NLsolve
+f2(x) = [(x[1]+3)*(x[2]^3-7)+18
+        sin(x[2]*exp(x[1])-1)] # returns an array
+
+results = nlsolve(f2, [ 0.1; 1.2])
+results = nlsolve(f2, [ 0.1; 1.2], autodiff=:forward)
+
+function pd2(beta, wh, xmat, geotargets)
+  beta = reshape(beta, size(geotargets))
+  whs = psf.geo_weights(beta, wh, xmat)
+  calctargets = psf.geo_targets(whs, xmat)
+  pdiffs = psf.targ_pdiffs(calctargets, geotargets)
+  pdiffs
+end
+
+function fp2(beta)
+  pd2(beta, wh, xmat, geotargets)
+end
+
+fp2(ibeta)
+results = nlsolve(fp2, ibeta)
+
+
+# %% OLD reverse differentiation
 # https://github.com/JuliaDiff/ReverseDiff.jl/blob/master/examples/gradient.jl
 # f(a, b) = sum(a' * b + a * b')
 using ReverseDiff: GradientTape, GradientConfig, gradient, gradient!, compile, DiffResults

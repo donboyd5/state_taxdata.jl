@@ -32,14 +32,13 @@ end
 
 function targ_pdiffs(calctargets, geotargets)
     diffs = calctargets - geotargets
-    pdiffs = diffs ./ geotargets
+    pdiffs = diffs ./ geotargets * 100.
     pdiffs
 end
 
 function sspd(calctargets, geotargets)
     # worry about what to do when a geotarget is zero
-    diffs = calctargets - geotargets
-    pdiffs = diffs ./ geotargets
+    pdiffs = targ_pdiffs(calctargets, geotargets)
     sqpdiffs = pdiffs.^2
     sspd = sum(sqpdiffs)
     sspd
