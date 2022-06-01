@@ -52,4 +52,13 @@ function objfn(beta, wh, xmat, geotargets)
     obj
 end
 
+function objvec(beta, wh, xmat, geotargets)
+    beta = reshape(beta, size(geotargets))
+    whs = geo_weights(beta, wh, xmat)
+    calctargets = geo_targets(whs, xmat)
+    objvec = targ_pdiffs(calctargets, geotargets)
+    vec(objvec)
+end
+
+
 end

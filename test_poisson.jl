@@ -1,11 +1,14 @@
 # %% libraries
 using LinearAlgebra
 using Statistics
-using Optim
+using Optim, LineSearches
 using Optim: converged, maximum, maximizer, minimizer, iterations #some extra functions
 using Zygote
 using Tables
 using LeastSquaresOptim
+using GalacticOptim
+using GalacticOptimJL
+
 
 # comment blocks: ctrl-k ctrl-c
 # uncomment: clrl-k ctrl-u
@@ -33,11 +36,7 @@ import .getTaxProblem as gtp
 
 include("jl/rproblem.jl")
 
-# %% start by creating julia counterparts to selected python functions
-# https://docs.julialang.org/en/v1/manual/functions/
 
-# good, this takes a state-shares matrix and applies it to national weights to
-# get each household's state weights
 # %% functions
 
 function f(beta)
@@ -48,6 +47,17 @@ end
 function g!(G, x)
   G .=  f'(x)
 end
+
+function f2(beta, dummy)
+  # dummy added for GalacticOptim
+  psf.objfn(beta, wh, xmat, geotargets) / obj_scale
+end
+
+function fvec(beta)
+  # beta = reshape(beta, size(geotargets))
+  psf.objvec(beta, wh, xmat, geotargets)
+end
+
 
 
 # %% get a problem
@@ -109,6 +119,7 @@ obj_scale = 1.0
 wh_scale_goal = 100. # goal for the maxmimum
 # whscale = wh_scale_goal / maximum(wh)  # median
 whscale = wh_scale_goal / median(wh)
+whscale = 1.0
 wh = wh .* whscale
 quantile(vec(wh))
 
@@ -119,7 +130,7 @@ minimum(geotargets, dims=1)
 maximum(geotargets, dims=1)
 
 # xmat scaling multiplicative based on max abs of each col of geotargets
-targ_goal = 0.1
+targ_goal = 10.0
 # targscale = targ_goal ./ maximum(abs.(tp.geotargets), dims=1)
 # targscale = targ_goal ./ sum(tp.geotargets, dims=1)
 targscale = targ_goal ./ sum(xmat, dims=1)
@@ -148,20 +159,20 @@ ibeta = zeros(length(tp.geotargets))
 sum(xmat, dims=1)
 
 # %% run methods that do not require a gradient
-res1 = optimize(f, ibeta, NelderMead(),
+res1 = Optim.optimize(f, ibeta, NelderMead(),
 Optim.Options(g_tol = 1e-12, iterations = 10, store_trace = true, show_trace = true))
 
-res2 = optimize(f, ibeta, SimulatedAnnealing(),
+res2 = Optim.optimize(f, ibeta, SimulatedAnnealing(),
   Optim.Options(g_tol = 1e-4, iterations = 100))
 
 
 # %% run methods that require a gradient with forward auto differentiation
-res3 = optimize(f, ibeta, BFGS(),
+res3 = Optim.optimize(f, ibeta, BFGS(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
    autodiff = :forward) # gets slow with BIG problems
 
 # two ways to do it
-res4 = optimize(f, ibeta, LBFGS(),
+res4 = Optim.optimize(f, ibeta, LBFGS(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward)
 # 1897.9 4.125432e-14
@@ -171,25 +182,25 @@ res4 = optimize(f, ibeta, LBFGS(),
 
 # CG possibly best!
 # very good after 2 iterations ~4 mins, almost perfect after 3, 4.8 mins
-res5 = optimize(f, ibeta, ConjugateGradient(),
+res5 = Optim.optimize(f, ibeta, ConjugateGradient(),
 Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
  autodiff = :forward)
 # 1102.0 4.125609e-14 seemingly best
 
  # this seems really good after 3 iterations
- res6 = optimize(f, ibeta, GradientDescent(),
+ res6 = Optim.optimize(f, ibeta, GradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward) # seems to become very slow as problem size increases
 # 1910.7 3.078448e-11
 
 # really good after 5 iterations
-res7 = optimize(f, ibeta, MomentumGradientDescent(),
+res7 = Optim.optimize(f, ibeta, MomentumGradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward)
 # 1602.8 3.078448e-11
 
 # really good after 3 iterations 562 secs
-res8 = optimize(f, ibeta, AcceleratedGradientDescent(),
+res8 = Optim.optimize(f, ibeta, AcceleratedGradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward)
 # 1924.9 3.078448e-11
@@ -201,57 +212,191 @@ res8 = optimize(f, ibeta, AcceleratedGradientDescent(),
 # td = TwiceDifferentiable(f, ibeta; autodiff = :forward)
 # res9 = optimize(td, vec(ibeta), Newton())
 # Newton requires vector input; TOO slow with big problems
-res9 = optimize(f, ibeta, Newton(),
+res9 = Optim.optimize(f, ibeta, Newton(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward) # seems to get slow as problem gets large
 
-res10 = optimize(f, ibeta, NewtonTrustRegion(),
+res10 = Optim.optimize(f, ibeta, NewtonTrustRegion(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward)
 
 
 # %% run reverse auto differentiation
-
-res11 = optimize(f, g!, ibeta, LBFGS(),
+f(ibeta)
+res11 = Optim.optimize(f, g!, ibeta, LBFGS(),
   Optim.Options(iterations = 100, store_trace = true, show_trace = true))
 
-res11a = optimize(f, g!, minimizer(res11a), LBFGS(),
+res11a = Optim.optimize(f, g!, minimizer(res11), LBFGS(),
+  Optim.Options(iterations = 2000, store_trace = true, show_trace = true))
+
+res11a = Optim.optimize(f, g!, sol6a.minimizer, LBFGS(),
   Optim.Options(iterations = 2000, store_trace = true, show_trace = true))
 
 # cg still seems best
-# lphaguess = LineSearches.InitialQuadratic() and linesearch = LineSearches.MoreThuente()  investigate
+using LineSearches
+# alphaguess = LineSearches.InitialQuadratic() and linesearch = LineSearches.MoreThuente()  investigate
+# HagerZhang MoreThuente BackTracking StrongWolfe Static
 f(ibeta)
-res12 = optimize(f, g!, ibeta, ConjugateGradient(eta=0.01),
+# this seems good 6/1/2022
+res12 = Optim.optimize(f, g!, ibeta, ConjugateGradient(eta=0.01; alphaguess = LineSearches.InitialConstantChange(), linesearch = LineSearches.HagerZhang()),
+  Optim.Options(g_tol = 1e-6, iterations = 10_000, store_trace = true, show_trace = true))
+# 4.669833e+03 after 10k
+# 2.030909e+03 after 20k
+# 1.173882e+03 after 30k
+#  after 40k
+#  after 50k
+res12a = Optim.optimize(f, g!, minimizer(res12a), ConjugateGradient(eta=0.01; alphaguess = LineSearches.InitialConstantChange(), linesearch = LineSearches.HagerZhang()),
+  Optim.Options(g_tol = 1e-6, iterations = 10_000, store_trace = true, show_trace = true))
+  # minimizer(res12)
+  # minimizer(res12a)
+
+# ConjugateGradient(;linesearch = LLineSearches.HagerZhang())
+# ConjugateGradient(;linesearch = LineSearches.MoreThuente())
+res12a = Optim.optimize(f, g!, minimizer(res11a), ConjugateGradient(eta=0.01),
   Optim.Options(g_tol = 1e-6, iterations = 10000, store_trace = true, show_trace = true))
 
-res12a = optimize(f, g!, minimizer(res11a), ConjugateGradient(eta=0.01),
+res12b = Optim.optimize(f, g!, minimizer(res12a), ConjugateGradient(eta=0.01;linesearch = LineSearches.MoreThuente()),
+  Optim.Options(g_tol = 1e-6, iterations = 10000, store_trace = true, show_trace = true))
+
+using TimerOutputs
+prob = Optim.UnconstrainedProblems.examples["Rosenbrock"]
+const to = TimerOutput()
+
+f1(x    ) =  @timeit to "f1"  prob.f(x)
+g1!(x, g1) =  @timeit to "g1!" prob.g!(x, g)
+h1!(x, h1) =  @timeit to "h1!" prob.h!(x, h)
+
+begin
+reset_timer!(to)
+@timeit to "Trust Region" begin
+    res = Optim.optimize(f1, g1!, h1!, prob.initial_x, NewtonTrustRegion())
+end
+show(to; allocations = false)
+end
+
+
+res12a = Optim.optimize(f, g!, sol6a.minimizer, ConjugateGradient(eta=0.01),
   Optim.Options(g_tol = 1e-6, iterations = 2000, store_trace = true, show_trace = true))
 
-res13 = optimize(f, g!, ibeta, GradientDescent(),
+res13 = Optim.optimize(f, g!, ibeta, GradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
 
-res13a = optimize(f, g!, minimizer(res13a), GradientDescent(),
-  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+res13a = Optim.optimize(f, g!, minimizer(res17a), GradientDescent(),
+  Optim.Options(g_tol = 1e-6, iterations = 2000, store_trace = true, show_trace = true))
 
-res14 = optimize(f, g!, ibeta, MomentumGradientDescent(),
+res14 = Optim.optimize(f, g!, ibeta, MomentumGradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 10000, store_trace = true, show_trace = true))
 
-res15 = optimize(f, g!, ibeta, AcceleratedGradientDescent(),
+res15 = Optim.optimize(f, g!, ibeta, AcceleratedGradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
 
-# res16 = optimize(f, g!, ibeta, Newton(),
+# res16 = Optim.optimize(f, g!, ibeta, Newton(),
 #   Optim.Options(g_tol = 1e-6, iterations = 5, store_trace = true, show_trace = true);
 #   autodiff = :forward) # seems to get slow as problem gets large
 
-res17 = optimize(f, g!, ibeta, ConjugateGradient(eta=0.01),
+res17 = Optim.optimize(f, g!, ibeta, ConjugateGradient(eta=0.01),
   Optim.Options(iterations = 1000, store_trace = true, show_trace = true))
 
-res17a = optimize(f, g!, minimizer(res17a), ConjugateGradient(eta=0.01),
+res17a = Optim.optimize(f, g!, minimizer(res11a), ConjugateGradient(eta=0.01),
   Optim.Options(iterations = 2000, store_trace = true, show_trace = true))
 
 
-res18 = optimize(f, g!, ibeta, Optim.KrylovTrustRegion(),
-  Optim.Options(iterations = 10, store_trace = true, show_trace = true))
+# res18 = optimize(f, g!, ibeta, Optim.KrylovTrustRegion(),
+#   Optim.Options(iterations = 10, store_trace = true, show_trace = true))
+
+# %% krylov trust
+f2(ibeta, nothing)
+# p  = [1.0,100.0]
+# using ForwardDiff
+fn2 = GalacticOptim.OptimizationFunction(f2, GalacticOptim.AutoZygote())
+prob = GalacticOptim.OptimizationProblem(fn2, ibeta, nothing)
+prob3 = GalacticOptim.OptimizationProblem(fn2, minimizer(res13a), nothing)
+prob3 = GalacticOptim.OptimizationProblem(fn2, sol6a.minimizer, nothing)
+# using Optimization
+sol = GalacticOptim.solve(prob3, Optim.KrylovTrustRegion(), maxiters = 10_000, store_trace = true, show_trace = true, show_every=10)
+
+# sol2 = solve(prob, Fminbox(GradientDescent()), show_trace = true)
+# sol2 = solve(prob, Optim.Fminbox(GradientDescent()), show_trace = true, maxiters=3)
+
+sol3 = solve(prob, Newton(), show_trace = true, maxiters=3)
+sol3.minimum
+sol3.minimizer
+
+@time sol3a = solve(prob3, Newton(), show_trace = true, maxiters=3)
+sol3a.minimum
+
+@time sol3b = solve(prob3, NewtonTrustRegion(), show_trace = true, maxiters=3)
+sol3b.minimum # 1.1979870851977023e8 barely moved from ibeta
+
+sol4 = solve(prob, LBFGS(), show_trace = true, maxiters=100)
+sol4.minimum
+# sol5 = solve(prob, ADAM(0.1), maxiters = 10, show_trace = true)
+
+using GalacticMOI
+using Ipopt
+sol5 = solve(prob, Ipopt.Optimizer(), maxiters=2) # takes TOO LONG
+
+using GalacticNLopt
+# NLopt gradient-based optimizers are:
+# NLopt.LD_LBFGS_NOCEDAL() NLopt.LD_LBFGS() NLopt.LD_VAR1() NLopt.LD_VAR2()
+# NLopt.LD_TNEWTON() NLopt.LD_TNEWTON_RESTART() NLopt.LD_TNEWTON_PRECOND() NLopt.LD_TNEWTON_PRECOND_RESTART()
+# NLopt.LD_MMA() NLopt.LD_AUGLAG() NLopt.LD_AUGLAG_EQ() NLopt.LD_SLSQP() NLopt.LD_CCSAQ()
+# sol = solve(prob, Opt(:LN_BOBYQA, 2))
+# sol6 = solve(prob, Opt(:LD_SLSQP))
+sol6 = solve(prob, NLopt.LD_LBFGS(), maxiters=100)
+sol6 = solve(prob, NLopt.LD_MMA(), maxiters=10_000)
+sol6.minimum
+
+callback2 = function(p, l)
+  # println(iter, l)
+  # println("++++++++++++++++++")
+  println(l)
+
+  # global iter
+  # iter += 1
+
+  return false
+end
+@time sol6 = solve(prob, NLopt.LD_MMA(), callback=callback2, maxiters=1_000)
+sol6.minimum
+
+
+prob2 = GalacticOptim.OptimizationProblem(fn2, sol6a.minimizer, nothing)
+
+@time sol6a = solve(prob2, NLopt.LD_MMA(), maxiters=5_000, callback=callback2)
+sol6a.minimum
+# at 100
+# LD_LBFGS 1.4531892038182566e7
+# LD_VAR1 2.814110739921908e7
+# LD_VAR2 same
+# LD_MMA at 100 511749.0600063354; at 1_000 6970.619922676372; at 10_000 3201.2890169654047, at 16_000 2495.509254966556
+#   at 21_000 1616.3093901287261; 26k 1180.2242696991439; 31k ; 36k
+# LD_SLSQP 1.5771092439317225e7
+# LD_CCSAQ 1.3863958717007548e7
+# LD_TNEWTON 9.370676362182084e6
+# LD_TNEWTON_RESTART 1.914081009433879e7
+# LD_TNEWTON_PRECOND 1.727017879051921e7
+# LD_TNEWTON_PRECOND_RESTART 5.195132775119288e7
+#
+@time sol_temp = solve(prob, NLopt.LD_MMA(), maxiters=10)
+
+# result1 = GalacticOptim.solve(optprob1, ADAM(0.01), callback=callback, maxiters=10)
+# https://discourse.julialang.org/t/galacticoptim-solve-ignores-callback/81670
+callback = function(p, l)
+  println("++++++++++++++++++")
+  # println(p, l)
+  println(l)
+  return false
+end
+sol_temp = solve(prob, NLopt.LD_MMA(), maxiters=10, callback=callback)
+
+
+
+sol.minimum
+sol.minimizer - sol.u
+
+beta_o = reshape(sol6a.minimizer, size(geotargets))
+
 
 # https://galacticoptim.sciml.ai/dev/API/optimization_problem/
 # https://galacticoptim.sciml.ai/stable/API/optimization_problem/
@@ -305,6 +450,29 @@ solve(prob, Optim.KrylovTrustRegion())
 # 1.315721e+07 # .001
 # 1.127418e+07 # 0
 # 1.236774e+07 # 1.0
+
+# %% levenberg marquardt
+# https://github.com/sglyon/MINPACK.jl
+using MINPACK
+
+using LsqFit
+# https://github.com/JuliaNLSolvers/LsqFit.jl/
+# LsqFit.lmfit(cost_function, [0.5, 0.5], Float64[])
+fvec(ibeta)
+@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; show_trace=true, maxIter=3)
+# 194.759903 secs
+
+@time lsres2 = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=30)
+# 68.466341 secs for 3 iterations, 313.606478 secs for 30 iterations
+
+@time lsres3 = LsqFit.lmfit(fvec, lsres3.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10)
+
+# fieldnames(lsres)
+lsres.param
+# LsqFit.lmfit(cost_function, [0.5, 0.5], Float64[], autodiff=:forward)
+# LsqFit.LsqFitResult{Array{Float64,1},Array{Float64,1},Array{Float64,2},Array{Float64,1}}([2.0, 0.5], [4.44089e-16, 8.88178e-16, 1.77636e-15, 1.77636e-15, 1.77636e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15], [-1.0 -0.0; -2.0 -0.0; … ; -9.0 -0.0; -10.0 -0.0], true, Float64[])
+
+
 
 # %% newton
 # https://discourse.julialang.org/t/optim-jl-oncedifferentiable-baby-steps/10185
@@ -379,7 +547,7 @@ prob = GalacticOptim.OptimizationProblem(fng, x0)
 sol = GalacticOptim.solve(prob, Optim.KrylovTrustRegion())
 
 
-# again?
+# again? - this seems to do it -- having the dummy argument here called p
 using GalacticOptim
 using GalacticOptimJL
 using Zygote
@@ -452,8 +620,12 @@ include("nlp_ipopt.jl")
 
 # %% examine results
 res = res12
+res = lsres3.param
+beta_o = reshape(res, size(geotargets))
+
 # dump(res)
 beta_o = reshape(minimizer(res), size(geotargets))
+
 whs_o = psf.geo_weights(beta_o, wh, xmat)
 whdiffs = sum(whs_o, dims=2) .- wh
 whpdiffs = whdiffs ./ wh
