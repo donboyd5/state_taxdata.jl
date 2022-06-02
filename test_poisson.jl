@@ -504,11 +504,11 @@ using LeastSquaresOptim
 # inplace forward, Dogleg, LSMR, 30 NOT yet conveged (2106591.468742), 203 secs
 # inplace forward, LevenbergMarquardt, QR, 30 not converged iter 298 seconds
 
-@time lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.QR()),
- autodiff = :forward, show_trace=true, iterations=30)
+# @time lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.QR()),
+#  autodiff = :forward, show_trace=true, iterations=30)
 
- @time  lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.Cholesky()),
- autodiff = :forward, show_trace=true, iterations=5)
+#  @time  lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.Cholesky()),
+#  autodiff = :forward, show_trace=true, iterations=5)
 
 # inplace supposed to be faster and uses less memory
 ibeta = zeros(length(tp.geotargets))
