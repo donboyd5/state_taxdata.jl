@@ -58,6 +58,12 @@ function fvec(beta)
   psf.objvec(beta, wh, xmat, geotargets)
 end
 
+function fvec!(out, beta)
+  # for LeastSquaresOptim inplace
+  out .= psf.objvec(beta, wh, xmat, geotargets)
+end
+
+
 
 
 # %% get a problem
@@ -68,7 +74,7 @@ tp = mtp.mtp(10000, 25, 12)
 tp = mtp.mtp(50000, 50, 20)
 tp = mtp.mtp(100000, 75, 40)
 
-tp = gtp.get_taxprob(6)
+tp = gtp.get_taxprob(2)
 
 # %% unpack the tuple
 xmat = tp.xmat
@@ -456,16 +462,66 @@ solve(prob, Optim.KrylovTrustRegion())
 using MINPACK
 
 using LsqFit
+# https://julianlsolvers.github.io/LsqFit.jl/latest/
 # https://github.com/JuliaNLSolvers/LsqFit.jl/
+# see Geodesic acceleration -- can I use curve_fit and this approach?
+
+# also examine:
+# https://juliapackages.com/p/leastsquaresoptim #  written with large scale problems in mind
+# https://github.com/matthieugomez/LeastSquaresOptim.jl
+
+# and possibly https://github.com/JuliaNLSolvers/NLsolve.jl
+
 # LsqFit.lmfit(cost_function, [0.5, 0.5], Float64[])
 fvec(ibeta)
-@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; show_trace=true, maxIter=3)
-# 194.759903 secs
+f(ibeta)
+# @time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; show_trace=true, maxIter=3)
+# # 194.759903 secs
 
-@time lsres2 = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=30)
+@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=500)
+# @time lsres = LsqFit.lmfit(fvec, lsres.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=100)
 # 68.466341 secs for 3 iterations, 313.606478 secs for 30 iterations
 
-@time lsres3 = LsqFit.lmfit(fvec, lsres3.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10)
+# @time lsres3 = LsqFit.lmfit(fvec, lsres3.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10)
+
+# prob9 21 iter 225.801845 seconds
+
+# try LeastSquaresOptim
+using LeastSquaresOptim
+# least squares optimizers Dogleg() and LevenbergMarquardt()
+# solvers LeastSquaresOptim.QR() or LeastSquaresOptim.Cholesky() for dense jacobians
+# For dense jacobians, the default option is Doglel(QR()).
+# For sparse jacobians, the default option is LevenbergMarquardt(LSMR())
+# optimize(rosenbrock, x0, Dogleg(LeastSquaresOptim.QR()))
+
+# You can also add the options : x_tol, f_tol, g_tol, iterations, Δ (initial radius),
+# autodiff (:central to use finite difference method or :forward to use ForwardDiff package)
+#  as well as lower / upper arguments to impose boundary constraints.
+
+# prob9
+# inplace forward, Dogleg, QR, 29 iter 273.723267 seconds
+# inplace forward, Dogleg, Cholesky,  rank deficient
+# inplace forward, Dogleg, LSMR, 30 NOT yet conveged (2106591.468742), 203 secs
+# inplace forward, LevenbergMarquardt, QR, 30 not converged iter 298 seconds
+
+@time lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.QR()),
+ autodiff = :forward, show_trace=true, iterations=30)
+
+ @time  lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.Cholesky()),
+ autodiff = :forward, show_trace=true, iterations=5)
+
+# inplace supposed to be faster and uses less memory
+ibeta = zeros(length(tp.geotargets))
+@time lsores = LeastSquaresOptim.optimize!(
+  LeastSquaresOptim.LeastSquaresProblem(x = ibeta, f! = fvec!, output_length = length(ibeta), autodiff = :forward),
+  LeastSquaresOptim.Dogleg(LeastSquaresOptim.QR()),
+  show_trace=true,
+  iterations=500)
+lsores.minimizer
+
+
+f(lsores.minimizer)
+f(lsres.param)
 
 # fieldnames(lsres)
 lsres.param
@@ -619,13 +675,17 @@ include("nlp_ipopt.jl")
 
 
 # %% examine results
-res = res12
-res = lsres3.param
-beta_o = reshape(res, size(geotargets))
 
 # dump(res)
+res = res12
 beta_o = reshape(minimizer(res), size(geotargets))
 
+# levenberg marquardt results
+res = lsres.param
+beta_o = reshape(res, size(geotargets))
+
+
+# calc results
 whs_o = psf.geo_weights(beta_o, wh, xmat)
 whdiffs = sum(whs_o, dims=2) .- wh
 whpdiffs = whdiffs ./ wh
