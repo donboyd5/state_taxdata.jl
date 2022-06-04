@@ -60,5 +60,4 @@ function objvec(beta, wh, xmat, geotargets)
     vec(objvec)
 end
 
-
 end

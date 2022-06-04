@@ -42,7 +42,6 @@ import .getTaxProblem as gtp
 # %% functions
 
 function f(beta)
-    # beta = reshape(beta, size(geotargets))
     psf.objfn(beta, wh, xmat, geotargets) / obj_scale
 end
 
@@ -50,8 +49,8 @@ function g!(G, x)
   G .=  f'(x)
 end
 
-function f2(beta, dummy)
-  # dummy added for GalacticOptim
+function f2(beta, pdummy)
+  # pdummy added for GalacticOptim
   psf.objfn(beta, wh, xmat, geotargets) / obj_scale
 end
 
@@ -65,7 +64,6 @@ function fvec!(out, beta)
   out .= psf.objvec(beta, wh, xmat, geotargets)
 end
 
-
 # %% get a problem
 
 tp = mtp.get_rproblem()
@@ -73,11 +71,12 @@ tp = mtp.get_rproblem()
 tp = mtp.mtp(10, 3, 2)
 tp = mtp.mtp(100, 8, 4)
 tp = mtp.mtp(1000, 12, 6)
+tp = mtp.mtp(5000, 20, 8)
 tp = mtp.mtp(10000, 25, 12)
 tp = mtp.mtp(50000, 50, 20)
 tp = mtp.mtp(100000, 75, 40)
 
-tp = gtp.get_taxprob(1)
+tp = gtp.get_taxprob(2)
 
 
 # %% unpack the problem
@@ -143,17 +142,17 @@ quantile(vec(xmat))
 
 sum(xmat, dims=1)
 
-# %% examine if desired
-nattargs = sum(geotargets, dims=1) # national value for each target
-sum(wh)
+# # %% examine if desired
+# nattargs = sum(geotargets, dims=1) # national value for each target
+# sum(wh)
 
-calcnat = sum(wh .* xmat, dims=1) # national value for each target at national weights
-calcdiffs = calcnat .- nattargs
-calcpdiffs = calcdiffs ./ nattargs
-quantile(vec(calcpdiffs))
+# calcnat = sum(wh .* xmat, dims=1) # national value for each target at national weights
+# calcdiffs = calcnat .- nattargs
+# calcpdiffs = calcdiffs ./ nattargs
+# quantile(vec(calcpdiffs))
 
 
-# %% levenberg marquardt
+# %% levenberg marquardt with LsqFit.lmfit
 # https://github.com/sglyon/MINPACK.jl
 
 # https://julianlsolvers.github.io/LsqFit.jl/latest/
@@ -176,7 +175,8 @@ f(ibeta)
 # @time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; show_trace=true, maxIter=3)
 # # 194.759903 secs
 
-@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=5)
+@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10_000)
+# Float64[] is a placeholder for weights for the parameters (differences)
 # @time lsres = LsqFit.lmfit(fvec, lsres.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=100)
 # 68.466341 secs for 3 iterations, 313.606478 secs for 30 iterations
 
@@ -191,6 +191,41 @@ lsres.param
 # LsqFit.lmfit(cost_function, [0.5, 0.5], Float64[], autodiff=:forward)
 # LsqFit.LsqFitResult{Array{Float64,1},Array{Float64,1},Array{Float64,2},Array{Float64,1}}([2.0, 0.5], [4.44089e-16, 8.88178e-16, 1.77636e-15, 1.77636e-15, 1.77636e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15], [-1.0 -0.0; -2.0 -0.0; … ; -9.0 -0.0; -10.0 -0.0], true, Float64[])
 
+
+# %% curve_fit
+
+function geotargs(geotargets, beta)
+  # assumes wh and xmat are in the environment
+  beta = reshape(beta, size(tp.geotargets))
+  whs = psf.geo_weights(beta, wh, xmat)
+  vec(psf.geo_targets(whs, xmat))
+end
+
+# fit = curve_fit(model, xdata, ydata, p0)
+fit = curve_fit(geotargs, vec(geotargets), vec(geotargets), ibeta)
+fit.param
+f(fit.param)
+sum(fit.resid.^2)
+
+ibeta = zeros(length(geotargets))
+fit = curve_fit(geotargs, vec(geotargets), vec(geotargets), ibeta; autodiff=:forwarddiff, show_trace=true, maxIter=500)
+
+using LinearAlgebra, Zygote
+
+function Avv!(dir_deriv,beta,v)
+    for i=1:length(geotargets)
+        dir_deriv[i] = transpose(v) * Zygote.hessian(z->geotargs(vec(geotargets)[i], z), beta) * v
+    end
+end
+
+fit2 = curve_fit(geotargs, vec(geotargets), vec(geotargets), ibeta; avv! = Avv!,lambda=0, min_step_quality = 0)
+
+# function Avv!(dir_deriv,p,v)
+#     for i=1:length(xdata)
+#         dir_deriv[i] = transpose(v) * Zygote.hessian(z->model(xdata[i],z),p) * v
+#     end
+# end
+
 # %% try to speed up LsqFit.lmfit
 # https://github.com/JuliaNLSolvers/LsqFit.jl/
 
@@ -203,7 +238,9 @@ lsres.param
 # This means that we need to write our model function so it applies
 # the model to the full dataset. We use `@.` to apply the calculations
 # across all rows.
-@. model(x, p) = p[1]*exp(-x*p[2])
+@. model(x, p) = p[1]*exp(-x*p[2]) # this is simply a function with 2 parameters p that predicts y based on x, which will have length(x)
+# in my case, it predicts geotargets based on params beta
+# or really, it predicts geo targets based on params beta, and data xmat and wh
 
 # some example data
 # xdata: independent variables
@@ -229,16 +266,142 @@ fit.param
 # curve_fit calls lmfit https://github.com/JuliaNLSolvers/LsqFit.jl/blob/master/src/curve_fit.jl
 # lmfit eventually calls levenberg_marquardt, line 68
 
+# To enable it [Geodesic acceleration], one needs to specify the function computing the directional second derivative of the function that is fitted,
+# as the avv! parameter. It is also preferable to set lambda and min_step_qualityto 0:
+# curve_fit(model, xdata, ydata, p0; avv! = Avv!,lambda=0, min_step_quality = 0)
+
+# Avv! must have the following form:
+  # p is the array of parameters
+  # v is the direction in which the direction is taken [???]
+  # dir_deriv is the output vector (the function is necessarily in-place)
+
+function Avv!(dir_deriv,p,v)
+  v1 = v[1]
+  v2 = v[2]
+  for i=1:length(xdata)
+      #compute all the elements of the Hessian matrix
+      h11 = 0
+      h12 = (-xdata[i] * exp(-xdata[i] * p[2]))
+      #h21 = h12
+      h22 = (xdata[i]^2 * p[1] * exp(-xdata[i] * p[2]))
+
+      # manually compute v'Hv. This whole process might seem cumbersome, but
+      # allocating temporary matrices quickly becomes REALLY expensive and might even
+      # render the use of geodesic acceleration terribly inefficient
+      dir_deriv[i] = h11*v1^2 + 2*h12*v1*v2 + h22*v2^2
+
+  end
+end
+
+m1 = curve_fit(model, xdata, ydata, p0)
+m2 = curve_fit(model, xdata, ydata, p0; avv! = Avv!,lambda=0, min_step_quality = 0)
+m1.param
+m2.param
+
+function Avv!(dir_deriv,p,v)
+  for i=1:length(xdata)
+      dir_deriv[i] = transpose(v) * Zygote.hessian(z -> model(xdata[i], z), p) * v  # z stand in for parameters
+  end
+end
+
+m3 = curve_fit(model, xdata, ydata, p0; avv! = Avv!,lambda=0, min_step_quality = 0)
+m3.param
+
+m3 = curve_fit(w, xdata, ydata, p0; avv! = Avv!,lambda=0, min_step_quality = 0)
+m3.param
+
+model(xdata[1], z)
+
+function f7(x)
+  x.^2
+end
+f7(3.)
+f7([1., 2., 3.])
+
+
+function Avv!(dir_deriv, p, v)
+  for i=1:length(p)
+      dir_deriv[i] = transpose(v) * Zygote.hessian(z -> f7(z), p) * v
+  end
+end
+
+function Avv!(dir_deriv, p, v)
+  dir_deriv = transpose(v) * Zygote.hessian(z -> f7(z), p) * v
+end
+
+res1 = LsqFit.lmfit(f7, [.1, .7, .3], Float64[]; autodiff=:forwarddiff, show_trace=true)
+res1.param
+
+res2 = LsqFit.lmfit(f7, [.1, .7, .3], Float64[]; avv! = Avv!,lambda=0, min_step_quality = 0, show_trace=true)
+res2.param
+
+
+res3 = LsqFit.lmfit(f7, [.1, .7, .3], Float64[]; autodiff=:forwarddiff, avv! = Avv!,lambda=0, min_step_quality = 0, show_trace=true)
+res3.param
+
+res1.param
+res2.param
+res3.param
+
+
+
+
+ibeta = zeros(length(geotargets))
+@time lsres1 = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10)
+
+function Avv!(dir_deriv, beta, v)
+  for i=1:length(geotargets)
+      dir_deriv[i] = transpose(v) * Zygote.hessian(z -> geotargs(geotargets[i], z), beta) * v
+  end
+end
+
+beta = ibeta
+
+function geotargs(geotargets, beta)
+  # assumes wh and xmat are in the environment
+  beta = reshape(beta, size(tp.geotargets))
+  whs = psf.geo_weights(beta, wh, xmat)
+  vec(psf.geo_targets(whs, xmat))
+end
+
+geotargs(11., ibeta)
+
+curve_fit(geotargs, geotargets, ydata, ibeta; avv! = Avv!,lambda=0, min_step_quality = 0)
+
+@time lsres2 = LsqFit.lmfit(fvec2, ibeta, Float64[]; avv! = Avv!,lambda=0, min_step_quality = 0, show_trace=true, maxIter=10)
+# @time lsres3 = LsqFit.lmfit(fvec, lsres3.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10)
+
+# prob9 21 iter 225.801845 seconds
+
+f(lsres1.param)
+
+
+
+geotargs(geotargets, ibeta)
+
+function fvec2(beta)
+  # beta = reshape(beta, size(geotargets))
+  psf.objvec(beta, wh, xmat, geotargets)
+end
+
+reshape(ibeta, size(geotargets))
+
+Zygote.hessian(fvec, 10.)
+fvec(10.)
+fvec([10., 5.])
+
+ibeta
 
 
 # %% examine results
-
+fvec([10.])
 # dump(res)
 res = res12
 beta_o = reshape(minimizer(res), size(geotargets))
 
 # levenberg marquardt results
 res = lsres.param
+# res = fit.param
 beta_o = reshape(res, size(geotargets))
 
 
@@ -365,6 +528,14 @@ res10 = Optim.optimize(f, ibeta, NewtonTrustRegion(),
   Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
   autodiff = :forward)
 
+ibeta = zeros(length(geotargets))
+td = TwiceDifferentiable(f, ibeta; autodiff = :forward)
+opts = Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true)
+res10a = Optim.optimize(td, ibeta, Newton(), opts)
+res10b = Optim.optimize(td, ibeta, NewtonTrustRegion(), opts)
+minimizer(res10a)
+
+f(minimizer(res10a.minimizer))
 
 # %% run reverse auto differentiation
 f(ibeta)
@@ -449,7 +620,140 @@ res17a = Optim.optimize(f, g!, minimizer(res11a), ConjugateGradient(eta=0.01),
 # res18 = optimize(f, g!, ibeta, Optim.KrylovTrustRegion(),
 #   Optim.Options(iterations = 10, store_trace = true, show_trace = true))
 
+# J = JacVec(f, u::AbstractArray; autodiff=true)
+# lmfit prob1 239.627257  f 4.169626e+02  73 iters
+# %% nlboxsolve
+using NLboxsolve
 
+lb = fill(-Inf, length(ibeta))
+ub = fill(Inf, length(ibeta))
+
+ibeta = zeros(length(geotargets))
+# soln_d = nlboxsolve(example!,x0,lb,ub,ftol=1e-15,xtol=1e-15,method=:lm)
+@time sol = nlboxsolve(fvec, ibeta, method = :lm_ar) # nice 388.999430 secs, f 76739.56030287837
+@time sol = nlboxsolve(fvec, ibeta, method = :newton) # fast, but memory? 379.192662 sec; produces Nans
+@time sol = nlboxsolve(fvec, ibeta, method = :lm)
+@time sol = nlboxsolve(fvec, ibeta, method = :lm_kyf)
+@time sol = nlboxsolve(fvec, ibeta, method = :lm_fan)
+@time sol = nlboxsolve(fvec, ibeta, method = :dogleg) # nice
+@time sol = nlboxsolve(fvec, ibeta, method = :nk) # nice 127.701281 sec, f 414160.287416278
+@time sol = nlboxsolve(fvec, ibeta, lb, ub, method = :nk, xtol=1e-15, ftol=1e-15) # nice 128.206980 sec, f 414160.414160.287416278
+@time sol = nlboxsolve(fvec, ibeta, method = :nk_fs, xtol=1e-15, ftol=1e-15, maxiters=10) # nice
+
+@time sol = nlboxsolve(fvec2, ibeta, method = :nk)
+
+ibetan = convert(Vector{Number}, ibetan)
+@time sol = nlboxsolve(fvec2, ibetan, method = :jfnk, krylovdim=30) # error
+# ERROR: MethodError: no method matching isless(::ComplexF64, ::ComplexF64)
+# maxiters=100 xtol::T=1e-8,ftol::T=1e-8 krylovdim::S=30
+
+vals = fvec(ibeta)
+typeof(vals)
+typeof(ibeta)
+
+function fvec2(beta)
+  # beta = reshape(beta, size(geotargets))
+  beta = convert(Vector{Number}, beta)
+  res = psf.objvec(beta, wh, xmat, geotargets)
+  convert(Vector{Number}, res)
+end
+vals = fvec2(ibeta)
+typeof(vals)
+typeof(ibeta)
+
+
+sol.iters
+sol.zero
+f(sol.zero)
+sum(sol.fzero.^2) # residuals
+
+# constrained Newton (method = :newton)
+# constrained Levenberg-Marquardt (method = :lm)
+# Kanzow, Yamashita, and Fukushima (2004) (method = :lm_kyf)
+# Fan (2013) (method = :lm_fan)
+# Amini and Rostami (2016) (method = :lm_ar) (this is the default method)
+# Bellavia, Macconi, and Pieraccini (2012) (method = :dogleg)
+# Chen and Vuik (2016) (method = :nk)
+# a constrained globalized Newton-Krylov method based on Frontini and Sormani (2004) (method = :nk_fs)
+# Jacobian-free Newton Krylov (method = :jfnk)
+
+
+
+sol = nlboxsolve(fvec, ibeta, xtol=1e-15, ftol=1e-15)
+nlboxsolve(fvec, ibeta, method=:jfnk)
+nlboxsolve(fvec, ibeta, xtol=1e-15, ftol=1e-15, method=:jfnk)
+nlboxsolve(fvec, ibeta, xtol=1e-15, ftol=1e-15, krylovdim=80, method=:jfnk)
+
+fvec(ibeta)
+
+function fivediagonal(x)
+
+    f = similar(x)
+
+    f[1]     = 4.0*(x[1] - x[2]^2) + x[2] - x[3]^2
+    f[2]     = 8.0*x[2]*(x[2]^2 - x[1]) - 2.0*(1.0 - x[2]) + 4.0*(x[2] - x[3]^2) + x[3] - x[4]^2
+    f[end-1] = 8.0*x[end-1]*(x[end-1]^2 - x[end-2]) - 2.0*(1.0 - x[end-1]) + 4.0*(x[end-1] - x[end]^2)
+             + x[end-2]^2 - x[end-3]
+    f[end]   = 8.0*x[end]*(x[end]^2 - x[end-1]) - 2*(1.0 - x[end]) + x[end-1]^2 - x[end-2]
+    for i = 3:length(x)-2
+        f[i] = 8.0*x[i]*(x[i]^2 - x[i-1]) - 2.0*(1.0 - x[i]) + 4.0*(x[i] - x[i+1]^2) + x[i-1]^2
+             - x[i-2] + x[i+1] - x[i+2]^2
+    end
+
+    return f
+
+end
+
+function fivediagonal!(f,x)
+
+    f[1]     = 4.0*(x[1] - x[2]^2) + x[2] - x[3]^2
+    f[2]     = 8.0*x[2]*(x[2]^2 - x[1]) - 2.0*(1.0 - x[2]) + 4.0*(x[2] - x[3]^2) + x[3] - x[4]^2
+    f[end-1] = 8.0*x[end-1]*(x[end-1]^2 - x[end-2]) - 2.0*(1.0 - x[end-1]) + 4.0*(x[end-1] - x[end]^2)
+             + x[end-2]^2 - x[end-3]
+    f[end]   = 8.0*x[end]*(x[end]^2 - x[end-1]) - 2*(1.0 - x[end]) + x[end-1]^2 - x[end-2]
+    for i = 3:length(x)-2
+        f[i] = 8.0*x[i]*(x[i]^2 - x[i-1]) - 2.0*(1.0 - x[i]) + 4.0*(x[i] - x[i+1]^2) + x[i-1]^2
+            - x[i-2] + x[i+1] - x[i+2]^2
+    end
+
+end
+
+n = 5000
+x0 = [2.0 for _ in 1:n]
+@time soln_a = nlboxsolve(fivediagonal,x0,xtol=1e-15,ftol=1e-15,krylovdim=80,method=:jfnk)
+@time soln_b = nlboxsolve(fivediagonal!,x0,xtol=1e-15,ftol=1e-15,krylovdim=80,method=:jfnk)
+
+
+# %% OptimPack and OptimPackNextGen
+# https://github.com/emmt/OptimPackNextGen.jl
+# https://github.com/emmt/OptimPackNextGen.jl/blob/master/doc/quasinewton.md
+
+
+# add https://github.com/emmt/OptimPack.jl
+
+using OptimPack
+
+# The easiest way to use these minimizers is to provide a Julia function, say fg!, which is in charge of computing the value of the function and its gradient
+# for given variables. This function must have the form:
+
+# function fg!(x, g)
+#   g[...] = ... # store the gradient of the function
+#   f = ...      # compute the function value
+#   return f     # return the function value
+# end
+
+function fg!(beta, g)
+  g = Zygote.gradient(f, beta) # store the gradient of the function
+  return f(beta)     # return the function value
+end
+
+method = OptimPack.NLCG_POLAK_RIBIERE_POLYAK | OptimPack.NLCG_POWELL
+
+x = nlcg(fg!, ibeta, method)
+
+x2 = vmlm(fg!, ibeta, m=3)
+
+x = vmlmb(fg!, x0; mem=..., lower=..., upper=..., ftol=..., fmin=...)
 
 
 # %% newton
@@ -475,10 +779,13 @@ func = TwiceDifferentiable(vars -> Log_Likelihood(x, y, vars[1:nvar], vars[nvar 
 opt = optimize(func, ones(nvar+1))
 
 # %% newton my data
-
+# https://discourse.julialang.org/t/is-there-a-julia-package-that-uses-newton-krylov-method-for-systems-of-nonlinear-equations/36520/5
 fnewt = TwiceDifferentiable(f, ibeta; autodiff=:forward)
-
 resnewt = optimize(fnewt, ibeta, Optim.Options(iterations = 100, store_trace = true, show_trace = true))
+
+td = TwiceDifferentiable(f, initial_x; autodiff = :forward)
+Optim.minimizer(optimize(td, initial_x, Newton()))
+
 
 # %% hessians
 # https://gitter.im/JuliaNLSolvers/Optim.jl?at=5f43ca8bec534f584fbaf88b
