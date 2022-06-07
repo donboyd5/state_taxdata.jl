@@ -20,12 +20,14 @@ using Statistics
 using Optim, LineSearches
 using Optim: converged, maximum, maximizer, minimizer, iterations #some extra functions
 using Zygote
+using ForwardDiff
 using Tables
 using MINPACK
 using LsqFit
 using LeastSquaresOptim
 using GalacticOptim
 using GalacticOptimJL
+
 
 # %% load local modules
 include("jl/poisson_functions.jl")
@@ -63,6 +65,12 @@ function fvec!(out, beta)
   # for LeastSquaresOptim inplace
   out .= psf.objvec(beta, wh, xmat, geotargets)
 end
+
+function jfvec(beta)
+  ForwardDiff.jacobian(x -> fvec(x), beta)
+end
+
+
 
 # %% get a problem
 
@@ -126,6 +134,7 @@ geotargets = targscale .* geotargets
 quantile(vec(geotargets))
 xmat = targscale .* tp.xmat
 
+ibeta = zeros(length(geotargets))
 
 # scale = (k / 1000.) ./ sum(abs.(tp.xmat), dims=1)
 # targscale = 100000.0 ./ sum(xmat, dims=1)
@@ -175,21 +184,96 @@ f(ibeta)
 # @time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; show_trace=true, maxIter=3)
 # # 194.759903 secs
 
-@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10_000)
+
+@time lsres = LsqFit.lmfit(fvec, sol6.minimizer, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=200)
 # Float64[] is a placeholder for weights for the parameters (differences)
 # @time lsres = LsqFit.lmfit(fvec, lsres.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=100)
 # 68.466341 secs for 3 iterations, 313.606478 secs for 30 iterations
 
+# prob9 time, f
+# res0 57.308472, 7.819640e+04
+# res1 61.556728, 7.819640e+04
+# res2  58.648203, 7.819640e+04
+@time lsres0 = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=5)
+@time lsres1 = LsqFit.lmfit(fvec, jfvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=5)
+@time lsres2 = LsqFit.lmfit(fvec, jfvec, ibeta, Float64[]; show_trace=true, maxIter=25)
+
+@time lsres0 = LsqFit.lmfit(fvec, results.zero, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=5)
+
 # @time lsres3 = LsqFit.lmfit(fvec, lsres3.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=10)
 
 # prob9 21 iter 225.801845 seconds
-
+jfvec(ibeta)
 f(lsres.param)
+
+# Mads looong time 47266.37818506016
 
 # fieldnames(lsres)
 lsres.param
 # LsqFit.lmfit(cost_function, [0.5, 0.5], Float64[], autodiff=:forward)
 # LsqFit.LsqFitResult{Array{Float64,1},Array{Float64,1},Array{Float64,2},Array{Float64,1}}([2.0, 0.5], [4.44089e-16, 8.88178e-16, 1.77636e-15, 1.77636e-15, 1.77636e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15, 3.55271e-15], [-1.0 -0.0; -2.0 -0.0; … ; -9.0 -0.0; -10.0 -0.0], true, Float64[])
+
+
+# %% levenberg marquardt with MADS
+import Mads
+
+function callback(x_best::AbstractVector, of::Number, lambda::Number)
+	global callbacksucceeded
+	callbacksucceeded = true
+	# println("The callback function was called: $x_best, $of, $lambda")
+  println(of, " ", lambda)
+end
+
+#, np_lambda=4, tolOF=1e-24, tolX=1e-24, tolG=1e-24
+
+# @time madsm = Mads.minimize(f, ibeta)
+@time madslm = Mads.naive_levenberg_marquardt(fvec, jfvec, ibeta; maxIter=200)
+madslm.minimum
+
+@time madslm = Mads.levenberg_marquardt(fvec, jfvec, ibeta;
+  lambda = 10000.,
+  show_trace=false, callbackiteration=callback)
+madslm.minimum
+
+@time madslm = Mads.levenberg_marquardt(fvec, jfvec, ibeta;
+  #alwaysDoJacobian = true,
+  # maxEval=2001, maxIter=2000, maxJacobians=2000,
+  maxJacobians=20000,
+  # tolOF=1e-99, tolX=1e-99, tolG=1e-99,
+  show_trace=false, callbackiteration=callback)
+madslm.minimum
+f(ibeta)
+
+@time madslm = Mads.levenberg_marquardt(fvec, jfvec, ibeta;
+  #alwaysDoJacobian = true,
+  # maxEval=2001, maxIter=2000, maxJacobians=2000,
+  # maxJacobians=20000,
+  # tolOF=1e-99, tolX=1e-99, tolG=1e-99,
+  show_trace=false, callbackiteration=callback)
+
+sum(fvec(madslm.minimizer).^2)
+
+
+madslm.minimizer = ibeta
+
+for i in 1:60
+  println("iter group: ", i)
+  @time madslm = Mads.levenberg_marquardt(fvec, jfvec, madslm.minimizer;
+    #alwaysDoJacobian = true,
+      # maxEval=2001, maxIter=2000, maxJacobians=2000,
+        # maxJacobians=20000,
+          # tolOF=1e-99, tolX=1e-99, tolG=1e-99,
+            show_trace=false, callbackiteration=callback)
+  println(madslm.minimum)
+end
+
+madslm.minimum
+madslm.minimizer
+f(madslm.minimizer)
+madslm.Iter
+# maxEval::Integer=1001, maxIter::Integer=100, maxJacobians::Integer=100
+# tolX::Number=1e-4, tolG::Number=1e-6, tolOF::Number=1e-3, maxEval::Integer=1001, maxIter::Integer=100, maxJacobians::Integer=100,
+# show_trace::Bool=false, alwaysDoJacobian::Bool=false,
 
 
 # %% curve_fit
@@ -400,8 +484,11 @@ res = res12
 beta_o = reshape(minimizer(res), size(geotargets))
 
 # levenberg marquardt results
+res = madslm.minimizer
 res = lsres.param
+res = results.zero
 # res = fit.param
+
 beta_o = reshape(res, size(geotargets))
 
 
@@ -490,7 +577,7 @@ res4 = Optim.optimize(f, ibeta, LBFGS(),
 
 # CG possibly best!
 # very good after 2 iterations ~4 mins, almost perfect after 3, 4.8 mins
-res5 = Optim.optimize(f, ibeta, ConjugateGradient(),
+res5 = Optim.optimize(f, lsres.param, ConjugateGradient(),
 Optim.Options(g_tol = 1e-6, iterations = 10, store_trace = true, show_trace = true);
  autodiff = :forward)
 # 1102.0 4.125609e-14 seemingly best
@@ -554,8 +641,8 @@ using LineSearches
 # HagerZhang MoreThuente BackTracking StrongWolfe Static
 f(ibeta)
 # this seems good 6/1/2022
-res12 = Optim.optimize(f, g!, ibeta, ConjugateGradient(eta=0.01; alphaguess = LineSearches.InitialConstantChange(), linesearch = LineSearches.HagerZhang()),
-  Optim.Options(g_tol = 1e-6, iterations = 10_000, store_trace = true, show_trace = true))
+res12 = Optim.optimize(f, g!, lsres.param, ConjugateGradient(eta=0.01; alphaguess = LineSearches.InitialConstantChange(), linesearch = LineSearches.HagerZhang()),
+  Optim.Options(g_tol = 1e-6, iterations = 1_000, store_trace = true, show_trace = true))
 # 4.669833e+03 after 10k
 # 2.030909e+03 after 20k
 # 1.173882e+03 after 30k
@@ -597,7 +684,7 @@ res12a = Optim.optimize(f, g!, sol6a.minimizer, ConjugateGradient(eta=0.01),
 res13 = Optim.optimize(f, g!, ibeta, GradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
 
-res13a = Optim.optimize(f, g!, minimizer(res17a), GradientDescent(),
+res13a = Optim.optimize(f, g!, minimizer(res12a), GradientDescent(),
   Optim.Options(g_tol = 1e-6, iterations = 2000, store_trace = true, show_trace = true))
 
 res14 = Optim.optimize(f, g!, ibeta, MomentumGradientDescent(),
@@ -622,30 +709,176 @@ res17a = Optim.optimize(f, g!, minimizer(res11a), ConjugateGradient(eta=0.01),
 
 # J = JacVec(f, u::AbstractArray; autodiff=true)
 # lmfit prob1 239.627257  f 4.169626e+02  73 iters
+
+
+# %% accelerate CG or other --------------------------------
+# ConjugateGradient(eta=0.01; alphaguess = LineSearches.InitialConstantChange(), linesearch = LineSearches.HagerZhang())
+
+res12 = Optim.optimize(f, g!, ibeta, ConjugateGradient(),
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+# Default nonlinear procenditioner for `OACCEL`
+# nlprecon = GradientDescent(alphaguess=LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+#                            linesearch=LineSearches.Static())
+
+# HagerZhang (Taken from the Conjugate Gradient implementation by Hager and Zhang, 2006)
+# MoreThuente (From the algorithm in More and Thuente, 1994)
+# BackTracking (Described in Nocedal and Wright, 2006)
+# StrongWolfe (Nocedal and Wright)
+# Static (Takes the proposed initial step length.)
+
+# OACCEL(;manifold::Manifold = Flat(),
+#        alphaguess = LineSearches.InitialStatic(),
+#        linesearch = LineSearches.HagerZhang(),
+#        nlprecon = GradientDescent(
+#            alphaguess = LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+#            linesearch = LineSearches.Static(),
+#            manifold = manifold),
+#        nlpreconopts = Options(iterations = 1, allow_f_increases = true),
+#        ϵ0 = 1e-12,
+#        wmax::Int = 10)
+
+nlprecon = ConjugateGradient(alphaguess=LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+                             linesearch=LineSearches.Static())
+# Default size of subspace that OACCEL accelerates over is `wmax = 10`
+oacc10 = OACCEL(nlprecon=nlprecon, wmax=10)
+oacc5 = OACCEL(nlprecon=nlprecon, wmax=5)
+ngmres5 = NGMRES(nlprecon=nlprecon, wmax=5)
+
+precongd = GradientDescent(alphaguess=LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+                           linesearch=LineSearches.Static())
+gdoacc10 = OACCEL(nlprecon=precongd, wmax=10)
+gdoacc5 = OACCEL(nlprecon=precongd, wmax=5)
+gdngmres5 = NGMRES(nlprecon=precongd, wmax=5)
+
+res12a = Optim.optimize(f, g!, ibeta, oacc10,
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+res12b = Optim.optimize(f, g!, ibeta, oacc5,
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+res12c = Optim.optimize(f, g!, ibeta, ngmres5,
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+res12d = Optim.optimize(f, g!, ibeta, gdoacc10,
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+res12e = Optim.optimize(f, g!, ibeta, gdoacc5,
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+res12f = Optim.optimize(f, g!, ibeta, gdngmres5,
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+precongd = GradientDescent(alphaguess=LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+  linesearch=LineSearches.Static())
+
+
+precongd = GradientDescent(alphaguess=LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+  linesearch=LineSearches.StrongWolfe())
+gdoacc5 = OACCEL(nlprecon=precongd, wmax=5)
+
+res12e1 = Optim.optimize(f, g!, ibeta, gdoacc5,
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+res12e1 = Optim.optimize(f, g!, ibeta,
+  OACCEL(nlprecon = Optim.GradientDescent(alphaguess = LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+                    linesearch = LineSearches.Static()),
+       nlpreconopts = Optim.Options(iterations = 1, allow_f_increases = false),
+       ϵ0 = 1e-12,
+       wmax = 10),
+  Optim.Options(g_tol = 1e-6, iterations = 100, store_trace = true, show_trace = true))
+
+# OACCEL(;manifold::Manifold = Flat(),
+#        alphaguess = LineSearches.InitialStatic(),
+#        linesearch = LineSearches.HagerZhang(),
+#        nlprecon = GradientDescent(
+#            alphaguess = LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+#            linesearch = LineSearches.Static(),
+#            manifold = manifold),
+#        nlpreconopts = Options(iterations = 1, allow_f_increases = true),
+#        ϵ0 = 1e-12,
+#        wmax::Int = 10)
+
+
+#  res12 100: 7.841757e+07
+#  res12a 100: 8.462381e+07
+# res12b 100: 8.536739e+07
+# res12c 100: 9.110727e+07
+# res12d 100: 7.717282e+07
+# res12e 100: 7.574053e+07
+# res12f 100: 8.530660e+07
+# res12e1 100 gd, lsearch HZ: 7.585124e+07
+# res12e1 100 gd, lsearch MT: 7.603634e+07
+# res12e1 100 gd, lsearch BT: 7.574053e+07
+# res12e1 100 gd, lsearch SW: 7.751540e+07
+
+# Default nonlinear procenditioner for `OACCEL`
+nlprecon = GradientDescent(alphaguess=LineSearches.InitialStatic(alpha=1e-4,scaled=true),
+                           linesearch=LineSearches.Static())
+# Default size of subspace that OACCEL accelerates over is `wmax = 10`
+oacc10 = OACCEL(nlprecon=nlprecon, wmax=10)
+Optim.optimize(UP.objective(prob), UP.gradient(prob), prob.initial_x, oacc10)
+
+oacc5 = OACCEL(nlprecon=nlprecon, wmax=5)
+Optim.optimize(UP.objective(prob), UP.gradient(prob), prob.initial_x, oacc5)
+
+# now NGMRES
+ngmres5 = NGMRES(nlprecon=nlprecon, wmax=5)
+Optim.optimize(UP.objective(prob), UP.gradient(prob), prob.initial_x, ngmres5)
+
+
+
 # %% nlboxsolve
 using NLboxsolve
 
 lb = fill(-Inf, length(ibeta))
 ub = fill(Inf, length(ibeta))
 
+Zygote.hessian(x -> sum(x.^3), [1 2; 3 4])
+Zygote.hessian(sin, pi/2)
+
+Zygote.hessian(f, ibeta)
+
 ibeta = zeros(length(geotargets))
 # soln_d = nlboxsolve(example!,x0,lb,ub,ftol=1e-15,xtol=1e-15,method=:lm)
-@time sol = nlboxsolve(fvec, ibeta, method = :lm_ar) # nice 388.999430 secs, f 76739.56030287837
+@time sol = nlboxsolve(fvec, ibeta, method = :lm_ar, maxiters=30) # nice 388.999430 secs, f 76739.56030287837
+@time sol = nlboxsolve(fvec, lsres.param, method = :lm_ar, maxiters=30)
+@time sol = nlboxsolve(fvec, jfvec, ibeta, method = :lm_ar, maxiters=30)
+@time sol = nlboxsolve(fvec, jfvec, sol.zero, method = :lm_ar, maxiters=30)
 @time sol = nlboxsolve(fvec, ibeta, method = :newton) # fast, but memory? 379.192662 sec; produces Nans
 @time sol = nlboxsolve(fvec, ibeta, method = :lm)
 @time sol = nlboxsolve(fvec, ibeta, method = :lm_kyf)
 @time sol = nlboxsolve(fvec, ibeta, method = :lm_fan)
 @time sol = nlboxsolve(fvec, ibeta, method = :dogleg) # nice
+@time sol = nlboxsolve(fvec, jfvec, ibeta, method = :dogleg) # nice
 @time sol = nlboxsolve(fvec, ibeta, method = :nk) # nice 127.701281 sec, f 414160.287416278
 @time sol = nlboxsolve(fvec, ibeta, lb, ub, method = :nk, xtol=1e-15, ftol=1e-15) # nice 128.206980 sec, f 414160.414160.287416278
 @time sol = nlboxsolve(fvec, ibeta, method = :nk_fs, xtol=1e-15, ftol=1e-15, maxiters=10) # nice
 
 @time sol = nlboxsolve(fvec2, ibeta, method = :nk)
 
+function j(beta)
+  Zygote.hessian(f, beta)
+end
+j(ibeta)
+
+@time sol = nlboxsolve(fvec, j, ibeta, method = :lm_ar, maxiters=5)
+
 ibetan = convert(Vector{Number}, ibetan)
 @time sol = nlboxsolve(fvec2, ibetan, method = :jfnk, krylovdim=30) # error
 # ERROR: MethodError: no method matching isless(::ComplexF64, ::ComplexF64)
 # maxiters=100 xtol::T=1e-8,ftol::T=1e-8 krylovdim::S=30
+
+sol.trace
+sol
+
+sol.iters
+sol.trace
+sol.zero
+f(sol.zero)
+sum(sol.fzero.^2) # residuals
+f(ibeta)
+f(lsres.param)
 
 vals = fvec(ibeta)
 typeof(vals)
@@ -663,6 +896,7 @@ typeof(ibeta)
 
 
 sol.iters
+sol.trace
 sol.zero
 f(sol.zero)
 sum(sol.fzero.^2) # residuals
@@ -904,7 +1138,7 @@ include("nlp_ipopt.jl")
 
 
 
-# %% krylov trust
+# %% krylov trust -- worth more investigation
 f2(ibeta, nothing)
 # p  = [1.0,100.0]
 # using ForwardDiff
@@ -912,8 +1146,21 @@ fn2 = GalacticOptim.OptimizationFunction(f2, GalacticOptim.AutoZygote())
 prob = GalacticOptim.OptimizationProblem(fn2, ibeta, nothing)
 prob3 = GalacticOptim.OptimizationProblem(fn2, minimizer(res13a), nothing)
 prob3 = GalacticOptim.OptimizationProblem(fn2, sol6a.minimizer, nothing)
+prob3 = GalacticOptim.OptimizationProblem(fn2, results.zero, nothing)
 # using Optimization
-sol = GalacticOptim.solve(prob3, Optim.KrylovTrustRegion(), maxiters = 10_000, store_trace = true, show_trace = true, show_every=10)
+sol = GalacticOptim.solve(prob3, Optim.KrylovTrustRegion(), maxiters = 1_000, store_trace = true, show_trace = true, show_every=10)
+
+sol = GalacticOptim.solve(prob3, Optim.NewtonTrustRegion(), maxiters = 1_000, store_trace = true, show_trace = true, show_every=1)
+
+@time sol = GalacticOptim.solve(prob, Optim.NewtonTrustRegion(), maxiters = 20, store_trace = true)  # 2360 secs, obj 61.9m
+@time sol = GalacticOptim.solve(prob, Optim.Newton(), maxiters = 20, store_trace = true)
+@time sol = GalacticOptim.solve(prob, Optim.NGMRES(), maxiters = 200, store_trace = true, show_trace = true, show_every=20)
+@time sol = GalacticOptim.solve(prob, Optim.OACCEL(), maxiters = 20000, store_trace = true, show_trace = true, show_every=40)
+# Optim.NGMRES()
+# Optim.OACCEL()
+
+sol.minimum
+f(sol.minimizer)
 
 # sol2 = solve(prob, Fminbox(GradientDescent()), show_trace = true)
 # sol2 = solve(prob, Optim.Fminbox(GradientDescent()), show_trace = true, maxiters=3)
@@ -944,7 +1191,7 @@ using GalacticNLopt
 # sol = solve(prob, Opt(:LN_BOBYQA, 2))
 # sol6 = solve(prob, Opt(:LD_SLSQP))
 sol6 = solve(prob, NLopt.LD_LBFGS(), maxiters=100)
-sol6 = solve(prob, NLopt.LD_MMA(), maxiters=10_000)
+sol6 = solve(prob, NLopt.LD_MMA(), maxiters=1_000, show_trace = true)
 sol6.minimum
 
 callback2 = function(p, l)
@@ -957,13 +1204,11 @@ callback2 = function(p, l)
 
   return false
 end
-@time sol6 = solve(prob, NLopt.LD_MMA(), callback=callback2, maxiters=1_000)
+@time sol6 = solve(prob, NLopt.LD_MMA(), callback=callback2, maxiters=10_000)
 sol6.minimum
 
-
-prob2 = GalacticOptim.OptimizationProblem(fn2, sol6a.minimizer, nothing)
-
-@time sol6a = solve(prob2, NLopt.LD_MMA(), maxiters=5_000, callback=callback2)
+prob2 = GalacticOptim.OptimizationProblem(fn2, sol6.minimizer, nothing)
+@time sol6a = solve(prob2, NLopt.LD_MMA(), maxiters=10_000, callback=callback2)
 sol6a.minimum
 # at 100
 # LD_LBFGS 1.4531892038182566e7
@@ -1051,7 +1296,7 @@ solve(prob, Optim.KrylovTrustRegion())
 # 1.127418e+07 # 0
 # 1.236774e+07 # 1.0
 
-# %% roots
+# %% roots nlsolve ========================
 using NLsolve
 f2(x) = [(x[1]+3)*(x[2]^3-7)+18
         sin(x[2]*exp(x[1])-1)] # returns an array
@@ -1072,7 +1317,104 @@ function fp2(beta)
 end
 
 fp2(ibeta)
-results = nlsolve(fp2, ibeta)
+
+# method = :trust_region
+
+# method = :newton
+# This method accepts a custom parameter linesearch, which must be equal to a function computing the linesearch. Currently, available values are taken from
+# the LineSearches package. By default, no linesearch is performed. Note: it is assumed that a passed linesearch function will at least update the solution vector and evaluate the function at the new point.
+# HagerZhang (Taken from the Conjugate Gradient implementation by Hager and Zhang, 2006)
+# MoreThuente (From the algorithm in More and Thuente, 1994)
+# BackTracking (Described in Nocedal and Wright, 2006)
+# StrongWolfe (Nocedal and Wright)
+# Static (Takes the proposed initial step length.)
+
+
+# method = :anderson ERROR: LAPACKException(1)
+# linesearches
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :newton, linesearch=LineSearches.Static(), iterations=5, show_trace = true)
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :newton, linesearch=LineSearches.MoreThuente(), iterations=5, show_trace = true)
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :broyden, linesearch=LineSearches.HagerZhang(), iterations=50, show_trace = true)
+
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :anderson, iterations=25, show_trace = true)
+
+
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, autoscale=true, method = :trust_region, factor=10.0, iterations=200, show_trace = true)
+# @time results = nlsolve(fvec, ibeta, autodiff=:forward, show_trace = true)
+f(results.zero)
+f(ibeta)
+
+@time results2 = nlsolve(fvec, results.zero, autodiff=:forward, autoscale=true, method = :trust_region, factor=1.0, iterations=20, show_trace = true)
+
+stop
+
+# %% stop
+
+# prob9 287.276564, f 0
+
+# stub 2:
+# julia> @time results = nlsolve(fvec, ibeta, autodiff=:forward, autoscale=true, method = :trust_region, iterations=50, show_trace = true)
+# 89352.32683331153
+# Iter     f(x) inf-norm    Step 2-norm
+# ------   --------------   --------------
+#      0     3.170699e+03              NaN
+#      1     3.167727e+03     2.375773e+00
+#      2     3.161785e+03     4.752105e+00
+#      3     3.149909e+03     9.506449e+00
+#      4     3.126197e+03     1.902189e+01
+#      5     3.078967e+03     3.807994e+01
+#      6     2.985563e+03     7.630443e+01
+#      7     2.804467e+03     1.531699e+02
+#      8     2.466706e+03     3.084341e+02
+#      9     2.211088e+03     6.259345e+02
+#     10     1.745168e+03     1.299258e+03
+#     11     8.253235e+02     2.713203e+03
+#     12     3.031735e+02     3.165599e+03
+#     13     5.885888e+02     2.705933e+03
+#     14     5.027225e+02     5.025450e+03
+#     15     5.683660e+02     5.042770e+03
+#     16     8.489918e+02     3.952950e-13
+#     17     8.347716e+02     2.849997e-13
+#     18     8.277964e+02     5.665081e-13
+#     19     8.243288e+02     2.972180e-13
+#     20     8.225844e+02     3.485650e-13
+#     21     8.216763e+02     5.443656e-14
+#     22     8.210907e+02     2.298425e-13
+#     23     4.504602e+02     1.744964e+02
+#     24     6.199373e+02     1.743914e-13
+#     25     5.510673e+02     5.913161e-14
+#     26     1.519673e+02     9.635946e+01
+#     27     1.251351e+02     4.458129e+02
+#     28     1.737148e+02     1.367429e+03
+#     29     1.111398e+02     2.917128e+03
+#     30     1.653617e+02     1.682411e+03
+#     31     9.251482e+01     4.687297e+03
+#     32     3.506633e+02     2.071615e-12
+#     33     8.689092e+01     1.919204e+04
+#     34     4.584845e+02     7.629692e-13
+#     35     1.357286e+02     4.069544e+03
+#     36     1.310267e+02     2.024218e+04
+#     37     8.374561e+01     3.984989e+04
+#     38     1.108168e+02     4.475483e+04
+#     39     1.203225e+02     1.200658e+05
+#     40     5.373188e+01     1.388321e+05
+#     41     5.321076e+01     1.318710e+05
+#     42     5.309995e+01     1.073503e+06
+#     43     5.280050e+01     6.560022e+05
+#     44     5.265706e+01     2.258855e+06
+#     45     5.205422e+01     4.734785e+06
+#     46     5.191688e+01     1.164533e+07
+#     47     5.166083e+01     9.866703e+06
+#     48     5.155104e+01     2.298473e+07
+#     49     5.138325e+01     6.346780e+07
+#     50     5.145441e+01     2.110034e+08
+# 741.791642 seconds (149.46 k allocations: 2.053 TiB, 11.42% gc time)
+
+
+
+
+
+
 
 
 # %% OLD reverse differentiation
@@ -1158,6 +1500,8 @@ Zygote.gradient(x -> 3x^2 + 2x + 1, 5)
 function f1(x)
     3x^2 + 2x + 1
 end
+
+f1(3)
 
 g = Zygote.gradient(f1, 5)
 g
