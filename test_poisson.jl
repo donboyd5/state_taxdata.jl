@@ -44,7 +44,11 @@ import .getTaxProblem as gtp
 # %% functions
 
 function f(beta)
-    psf.objfn(beta, wh, xmat, geotargets) / obj_scale
+    psf.objfn(beta, wh, xmat, geotargets) # / obj_scale
+end
+
+function f!(out, beta)
+  out = psf.objfn(beta, wh, xmat, geotargets) # / obj_scale
 end
 
 function g!(G, x)
@@ -53,7 +57,7 @@ end
 
 function f2(beta, pdummy)
   # pdummy added for GalacticOptim
-  psf.objfn(beta, wh, xmat, geotargets) / obj_scale
+  psf.objfn(beta, wh, xmat, geotargets)
 end
 
 function fvec(beta)
@@ -66,9 +70,15 @@ function fvec!(out, beta)
   out .= psf.objvec(beta, wh, xmat, geotargets)
 end
 
+function gvec!(out, beta)
+  out .= ForwardDiff.jacobian(x -> fvec(x), beta)
+end
+
+
 function jfvec(beta)
   ForwardDiff.jacobian(x -> fvec(x), beta)
 end
+
 
 
 
@@ -96,6 +106,8 @@ h = size(tp.xmat)[1]
 xmat = tp.xmat
 wh = tp.wh
 geotargets = tp.geotargets
+
+ibeta = zeros(length(geotargets))
 
 
 # %% scaling
@@ -133,8 +145,6 @@ targscale = targ_goal ./ sum(xmat, dims=1)
 geotargets = targscale .* geotargets
 quantile(vec(geotargets))
 xmat = targscale .* tp.xmat
-
-ibeta = zeros(length(geotargets))
 
 # scale = (k / 1000.) ./ sum(abs.(tp.xmat), dims=1)
 # targscale = 100000.0 ./ sum(xmat, dims=1)
@@ -175,6 +185,27 @@ sum(xmat, dims=1)
 
 # and possibly https://github.com/JuliaNLSolvers/NLsolve.jl
 
+# Keyword arguments
+# * `x_tol::Real=1e-8`: search tolerance in x
+# * `g_tol::Real=1e-12`: search tolerance in gradient
+# * `maxIter::Integer=1000`: maximum number of iterations
+# * `min_step_quality=1e-3`: for steps below this quality, the trust region is shrinked
+# * `good_step_quality=0.75`: for steps above this quality, the trust region is expanded
+# * `lambda::Real=10`: (inverse of) initial trust region radius
+# * `tau=Inf`: set initial trust region radius using the heuristic : tau*maximum(jacobian(df)'*jacobian(df))
+# * `lambda_increase=10.0`: `lambda` is multiplied by this factor after step below min quality
+# * `lambda_decrease=0.1`: `lambda` is multiplied by this factor after good quality steps
+# * `show_trace::Bool=false`: print a status summary on each iteration if true
+# * `lower,upper=[]`: bound solution to these limits
+
+# returns
+# param::P
+# resid::R
+# jacobian::J
+# converged::Bool
+# wt::W
+
+
 ibeta = zeros(length(geotargets))
 # ibeta = randn(length(tp.geotargets))
 
@@ -184,11 +215,41 @@ f(ibeta)
 # @time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; show_trace=true, maxIter=3)
 # # 194.759903 secs
 
-
-@time lsres = LsqFit.lmfit(fvec, sol6.minimizer, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=200)
+@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=50)
 # Float64[] is a placeholder for weights for the parameters (differences)
 # @time lsres = LsqFit.lmfit(fvec, lsres.param, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=100)
 # 68.466341 secs for 3 iterations, 313.606478 secs for 30 iterations
+sum(lsres.resid.^2)
+f(lsres.param)
+# 16 iter, 4.2 secs, 1.0141064462751911e-23
+
+# * `x_tol::Real=1e-8`: search tolerance in x
+# * `g_tol::Real=1e-12`: search tolerance in gradient
+# * `maxIter::Integer=1000`: maximum number of iterations
+# * `min_step_quality=1e-3`: for steps below this quality, the trust region is shrinked
+# * `good_step_quality=0.75`: for steps above this quality, the trust region is expanded  (0, 1.0]
+# * `lambda::Real=10`: (inverse of) initial trust region radius
+# * `tau=Inf`: set initial trust region radius using the heuristic : tau*maximum(jacobian(df)'*jacobian(df))
+# * `lambda_increase=10.0`: `lambda` is multiplied by this factor after step below min quality
+# * `lambda_decrease=0.1`: `lambda` is multiplied by this factor after good quality steps
+# * `show_trace::Bool=false`: print a status summary on each iteration if true
+# * `lower,upper=[]`: bound solution to these limits
+@time lsres = LsqFit.lmfit(fvec, ibeta, Float64[]; autodiff=:forwarddiff, show_trace=true, maxIter=5, min_step_quality=.5, good_step_quality=1.0)
+
+# stub2 1.734587780229056e8
+f(ibeta)
+# baseline 10 iter: f 1.543305e+05 time 92:   1, 1.570074e+07, 2 2.211318e+06, 3 8.746149e05, 4 4.317217e+05, 5 4.317217e+05
+# gtol 1e-4
+# tau 10.0: BAD
+# tau 1e9: BAD
+# msq 1e-1: ok
+# msq 0.5: ok
+# msq 0.7  f  2.368598e+05
+# gsq: 0.5 not as good as bl; 0.95 not as good
+# lambda 5.0 ok
+# lambda 15.0 f 4.482722e+05, 77 secs
+# li 20.0 ok
+
 
 # prob9 time, f
 # res0 57.308472, 7.819640e+04
@@ -274,6 +335,69 @@ madslm.Iter
 # maxEval::Integer=1001, maxIter::Integer=100, maxJacobians::Integer=100
 # tolX::Number=1e-4, tolG::Number=1e-6, tolOF::Number=1e-3, maxEval::Integer=1001, maxIter::Integer=100, maxJacobians::Integer=100,
 # show_trace::Bool=false, alwaysDoJacobian::Bool=false,
+
+
+# %% minpack least squares
+
+# Available methods for the version where only f! is pased are:
+#   :hybr: Modified version of Powell's algorithm. Uses MINPACK routine hybrd1
+#   :lm: Levenberg-Marquardt. Uses MINPACK routine lmdif1
+#   :lmdif: Advanced Levenberg-Marquardt (more options available with ;kwargs...). See MINPACK routine lmdif for more information
+#   :hybrd: Advacned modified version of Powell's algorithm (more options available with ;kwargs...). See MINPACK routine hybrd for more information
+
+#   Available methods for the version where both f! and g! are passed are:
+#   :hybr: Advacned modified version of Powell's algorithm with user supplied Jacobian. Additional arguments are available via ;kwargs.... See MINPACK routine hybrj for more information
+#   :lm: Advanced Levenberg-Marquardt with user supplied Jacobian. Additional arguments are available via ;kwargs.... See MINPACK routine lmder for more information
+
+# - `algo::String`: the name of the lagorithm used
+# - `initial_x::Vector{Float64}`: the starting point
+# - `x::Vector{Float64}`: The final value of `x`. When converged evaluating the objective at `x` should give zeros
+# - `f::Vector{Float64}`: The function value at `x`
+# - `return_code::Int`: The return code from MINPACK
+# - `converged::Bool`: Whether or not the algorithm converged
+# - `msg::String`: The message from MINPACK describing outcome
+# - `trace::AlgoTrace`: If tracing was enabled, a detailed trace of all iterations
+
+# /*       ftol is a nonnegative input variable. termination */
+# /*         occurs when both the actual and predicted relative */
+# /*         reductions in the sum of squares are at most ftol. */
+# /*         therefore, ftol measures the relative error desired */
+# /*         in the sum of squares. */
+
+# /*       xtol is a nonnegative input variable. termination */
+# /*         occurs when the relative error between two consecutive */
+# /*         iterates is at most xtol. therefore, xtol measures the */
+# /*         relative error desired in the approximate solution. */
+
+# /*       gtol is a nonnegative input variable. termination */
+# /*         occurs when the cosine of the angle between fvec and */
+# /*         any column of the jacobian is at most gtol in absolute */
+# /*         value. therefore, gtol measures the orthogonality */
+# /*         desired between the function vector and the columns */
+# /*         of the jacobian. */
+
+
+
+# kwargs: iterations, xtol, gtol
+
+# mp1 = fsolve(fvec!, ibeta, show_trace=true, method=:lm)
+
+@time mp2 = fsolve(fvec!, gvec!, ibeta, show_trace=true, method=:lm, ftol=1e-36, xtol=1e-36, gtol=1e-36, iterations=200)
+
+mp2.algo
+mp2.initial_x
+mp2.x
+# f(mp1.x)
+f(mp2.x)
+mp2.f
+# sum(mp1.f.^2)
+sum(mp2.f.^2)
+mp2.trace
+
+@time mp3 = fsolve(fvec!, gvec!, mp2.x, show_trace=true, method=:lm, ftol=1e-36, xtol=1e-36, gtol=1e-36, iterations=20)
+f(mp3.x)
+quantile(mp3.f, (0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0))
+
 
 
 # %% curve_fit
@@ -487,6 +611,8 @@ beta_o = reshape(minimizer(res), size(geotargets))
 res = madslm.minimizer
 res = lsres.param
 res = results.zero
+res = lsores.minimizer
+res = mp2.x
 # res = fit.param
 
 beta_o = reshape(res, size(geotargets))
@@ -522,7 +648,7 @@ quantile(vec((getarg_ou .- tp.geotargets) ./ tp.geotargets), (0, 0.01, 0.1, 0.25
 # using LeastSquaresOptim
 # least squares optimizers Dogleg() and LevenbergMarquardt()
 # solvers LeastSquaresOptim.QR() or LeastSquaresOptim.Cholesky() for dense jacobians
-# For dense jacobians, the default option is Doglel(QR()).
+# For dense jacobians, the default option is Dogleg(QR()).
 # For sparse jacobians, the default option is LevenbergMarquardt(LSMR())
 # optimize(rosenbrock, x0, Dogleg(LeastSquaresOptim.QR()))
 
@@ -536,9 +662,17 @@ quantile(vec((getarg_ou .- tp.geotargets) ./ tp.geotargets), (0, 0.01, 0.1, 0.25
 # inplace forward, Dogleg, LSMR, 30 NOT yet conveged (2106591.468742), 203 secs
 # inplace forward, LevenbergMarquardt, QR, 30 not converged iter 298 seconds
 
-# @time lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.QR()),
-#  autodiff = :forward, show_trace=true, iterations=30)
+@time lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.QR()),
+ autodiff = :forward, show_trace=true, iterations=30)
 
+# djb this seems good, maybe with 200 iterations??
+@time lsores = LeastSquaresOptim.optimize(fvec, ibeta, LevenbergMarquardt(LeastSquaresOptim.LSMR()),
+  autodiff = :forward, show_trace=true, iterations=100) # 626.6 secs; next 50 859; next 50 864.9; next 50 1000.307757; next 50 1083.807849
+
+@time lsores2 = LeastSquaresOptim.optimize(fvec, lsores2.minimizer, LevenbergMarquardt(LeastSquaresOptim.LSMR()),
+  autodiff = :forward, show_trace=true, iterations=50)
+
+  lsores2.minimizer
 #  @time  lsores = LeastSquaresOptim.optimize(fvec, ibeta, Dogleg(LeastSquaresOptim.Cholesky()),
 #  autodiff = :forward, show_trace=true, iterations=5)
 
@@ -641,7 +775,7 @@ using LineSearches
 # HagerZhang MoreThuente BackTracking StrongWolfe Static
 f(ibeta)
 # this seems good 6/1/2022
-res12 = Optim.optimize(f, g!, lsres.param, ConjugateGradient(eta=0.01; alphaguess = LineSearches.InitialConstantChange(), linesearch = LineSearches.HagerZhang()),
+res12 = Optim.optimize(f, g!, ibeta, ConjugateGradient(eta=0.01; alphaguess = LineSearches.InitialConstantChange(), linesearch = LineSearches.HagerZhang()),
   Optim.Options(g_tol = 1e-6, iterations = 1_000, store_trace = true, show_trace = true))
 # 4.669833e+03 after 10k
 # 2.030909e+03 after 20k
@@ -1333,18 +1467,31 @@ fp2(ibeta)
 # method = :anderson ERROR: LAPACKException(1)
 # linesearches
 @time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :newton, linesearch=LineSearches.Static(), iterations=5, show_trace = true)
+# BAD @time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :newton, linesearch=LineSearches.StrongWolfe(), iterations=5, show_trace = true) # seems to get stuck
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :newton, linesearch=LineSearches.BackTracking(), iterations=5, show_trace = true)
 @time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :newton, linesearch=LineSearches.MoreThuente(), iterations=5, show_trace = true)
+
 @time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :broyden, linesearch=LineSearches.HagerZhang(), iterations=50, show_trace = true)
 
-@time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :anderson, iterations=25, show_trace = true)
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, method = :anderson, m=100, iterations=1000, show_trace = true)
 
 
-@time results = nlsolve(fvec, ibeta, autodiff=:forward, autoscale=true, method = :trust_region, factor=10.0, iterations=200, show_trace = true)
+@time results = nlsolve(fvec, ibeta, autodiff=:forward, autoscale=false, method = :trust_region, factor=5.0, iterations=20, show_trace = true)
 # @time results = nlsolve(fvec, ibeta, autodiff=:forward, show_trace = true)
 f(results.zero)
 f(ibeta)
 
+# lsres 20 iter, 92 secs, was 154,3305
+# 20 iters, around 380 secs
+# factor 10  672,810.8733569914
+# factor 5.0 192,098.57983745285 (7.8415e01); with autoscale=false, 1.9e7
+# factor 2.0 1.1e6
+# factor 4.0 973,860
+# factor 7.5 344.143
+# factor 6.0 307,944.4451871131
+
 @time results2 = nlsolve(fvec, results.zero, autodiff=:forward, autoscale=true, method = :trust_region, factor=1.0, iterations=20, show_trace = true)
+@time results2 = nlsolve(fvec, results.zero, autodiff=:forward, autoscale=true, method = :trust_region, factor=1.0, iterations=20, autoscale=false, show_trace = true)
 
 stop
 
