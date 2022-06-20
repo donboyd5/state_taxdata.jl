@@ -9,11 +9,15 @@
 import Pkg; Pkg.add(Pkg.PackageSpec(name="Mads", rev="master"))
 
 import Mads
+import LinearAlgebra
 Mads.test()
 Mads.help()
-include(Mads.dir * "/../examples/contamination/contamination.jl")
 
-include(Mads.dir * "/../examples/contamination/optimization-lm.jl")
+# include(Mads.dir * "/../examples/contamination/contamination.jl")
+include(Mads.dir * "/examples/contamination/contamination.jl")
+include(Mads.dir * "/examples/MadsExamples.jl")
+
+include(Mads.dir * "/examples/contamination/optimization-lm.jl")
 
 include(Mads.dir * "/../examples/contamination/contamination.jl")
 
@@ -23,10 +27,10 @@ MadsLevenbergMarquardt.jl
 @Mads.stderrcapture gopt(x) = [1.0 0.0; 0.0 -1.0]
 
 @time res1 = Mads.naive_levenberg_marquardt(fopt, gopt, [100.0, 100.0])
-@Test.test LinearAlgebra.norm(results.minimizer - [0.0, 2.0]) < 0.01
+@Test.test LinearAlgebra.norm(res1.minimizer - [0.0, 2.0]) < 0.01
 
 @time res2 = Mads.levenberg_marquardt(fopt, gopt, [100.0, 100.0], show_trace=true)
-@Test.test LinearAlgebra.norm(results.minimizer - [0.0, 2.0]) < 0.01
+@Test.test LinearAlgebra.norm(res2.minimizer - [0.0, 2.0]) < 0.01
 
 @time res3 = Mads.levenberg_marquardt(fopt, gopt, [100.0, 100.0], tolOF=1e-24)
 @time res4 = Mads.levenberg_marquardt(fopt, gopt, [100.0, 100.0], np_lambda=4, tolX=1e-8, tolG=1e-12)
@@ -36,6 +40,7 @@ sum(fopt(res1.minimizer).^2)
 sum(fopt(res2.minimizer).^2)
 sum(fopt(res3.minimizer).^2)
 sum(fopt(res4.minimizer).^2)
+sum(fopt(res5.minimizer).^2)
 
 res1.minimum
 res2.minimum
@@ -45,7 +50,9 @@ res5.minimum
 
 #
 
-Mads.levenberg_marquardt(Mads.rosenbrock2_lm, Mads.rosenbrock2_gradient_lm, [-1.2, 1.0], tolX=1e-12, tolG=1e-12)
+res = Mads.levenberg_marquardt(Mads.rosenbrock2_lm, Mads.rosenbrock2_gradient_lm, [-1.2, 1.0], tolX=1e-12, tolG=1e-12)
+res.minimum
+
 
 using LsqFit
 x0 = [100.0, 100.0]
@@ -191,6 +198,7 @@ end
 
 Mads.madsinfo("Levenberg-Marquardt optimization of the Rosenbrock function with callback")
 results = Mads.levenberg_marquardt(Mads.rosenbrock_lm, Mads.rosenbrock_gradient_lm, [0.0, 0.0]; show_trace=false, callbackiteration=callback)
+results.minimum
 @Test.test callbacksucceeded
 
 
@@ -234,3 +242,26 @@ Optim.optimize(UP.objective(prob), UP.gradient(prob), prob.initial_x, ngmres5)
 # 	# returns: x, J
 # 	#   x - least squares solution for x
 # 	#   J - estimate of the Jacobian of f at x
+
+## djb test
+# %% djb test 6/15/2022
+
+import Mads
+
+function callback(x_best::AbstractVector, of::Number, lambda::Number)
+  global callbacksucceeded
+  callbacksucceeded = true
+  println(of, " ", lambda)
+end
+
+ndim = 200
+
+results = Mads.levenberg_marquardt(Mads.makerosenbrock(ndim), Mads.makerosenbrock_gradient(ndim), zeros(ndim),
+  lambda_mu=2.0, np_lambda=10, show_trace=true, maxJacobians=1000, callbackiteration=callback)
+
+results = Mads.levenberg_marquardt(Mads.makerosenbrock(ndim), Mads.makerosenbrock_gradient(ndim), results.minimizer, lambda_mu=0.1, np_lambda=10, show_trace=true, maxJacobians=10000, callbackiteration=callback, maxEval=1000000)
+results.minimum
+
+results = Mads.levenberg_marquardt(Mads.makerosenbrock(ndim), Mads.makerosenbrock_gradient(ndim), zeros(ndim),
+  lambda_mu=2.0, np_lambda=10, show_trace=true, maxJacobians=1000)
+
